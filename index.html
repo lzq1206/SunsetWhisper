@@ -103,6 +103,12 @@
           <div class="meta-item"><div class="meta-label">AOD 说明</div><div class="meta-value" id="panel-aod-label">—</div></div>
         </section>
 
+        <section id="panel-path-container">
+          <div id="panel-path-title">光路分层剖面</div>
+          <div id="panel-path-meta"></div>
+          <div id="panel-path-diagram"></div>
+        </section>
+
         <section id="panel-chart-container">
           <div id="panel-chart-title">48 小时朝霞 / 晚霞走势</div>
           <canvas id="forecast-chart"></canvas>
@@ -116,9 +122,7 @@
         <section id="about-section">
           <strong>方法说明</strong><br>
           采用 GFS 分层湿度 + 分层云量 + AOD，并沿日出/日落太阳方位角方向做光路采样，结合地球曲率判别可照亮区。<br>
-          页面每天自动重算，并在 GitHub Actions 中刷新静态数据。<br>
-          参考：
-          <a href="https://www.sunsetbot.top/halo/posts/2026/huo-shao-yun-yu-bao-jiao-cheng-zhang-jie-yi/" target="_blank" rel="noopener">火烧云定量预报教程</a>
+          页面每天自动重算，并在 GitHub Actions 中刷新静态数据。
         </section>
       </aside>
 

@@ -12,7 +12,7 @@ import {
 'use strict';
 
 const STATIC_DATA_URL = './data/latest.json';
-const CACHE_KEY = 'sunsetwhisper.static-cache.v1';
+const CACHE_KEY = 'sunsetwhisper.static-cache.v2';
 const CACHE_TTL_MS = 3 * 60 * 60 * 1000;
 const OPEN_METEO_URL = 'https://api.open-meteo.com/v1/gfs';
 const AIR_QUALITY_URL = 'https://air-quality-api.open-meteo.com/v1/air-quality';
@@ -73,6 +73,109 @@ function bestEventLabel(entry) {
   const { label } = scoreLabel(entry.score);
   const when = entry.detail?.eventType === 'sunrise' ? '朝霞' : '晚霞';
   return `${when} · ${label} ${entry.score.toFixed(2)}`;
+}
+
+function pressureLevelLabel(level) {
+  if (level >= 1000) return '近地层';
+  if (level >= 925) return '低层';
+  if (level >= 850) return '低层';
+  if (level >= 700) return '中层';
+  if (level >= 600) return '中层';
+  if (level >= 500) return '高层';
+  return '高层';
+}
+
+function pressureLevelColor(level, cloudCover) {
+  const opacity = Math.max(0.08, Math.min(0.9, (cloudCover ?? 0) / 100));
+  const palette = {
+    1000: `rgba(96, 165, 250, ${opacity})`,
+    925: `rgba(56, 189, 248, ${opacity})`,
+    850: `rgba(34, 211, 238, ${opacity})`,
+    700: `rgba(251, 146, 60, ${opacity})`,
+    600: `rgba(249, 115, 22, ${opacity})`,
+    500: `rgba(192, 132, 252, ${opacity})`,
+    400: `rgba(236, 72, 153, ${opacity})`,
+  };
+  return palette[level] ?? `rgba(148, 163, 184, ${opacity})`;
+}
+
+function renderPathDiagram(city) {
+  const root = document.getElementById('panel-path-diagram');
+  const meta = document.getElementById('panel-path-meta');
+  if (!root || !meta || !city) return;
+
+  const best = city.forecast.best;
+  const detail = best?.detail;
+  const profile = detail?.pathProfile ?? [];
+
+  if (!detail || !profile.length) {
+    meta.textContent = '暂无可用的光路剖面数据。';
+    root.innerHTML = '<div class="path-empty">暂无光路数据</div>';
+    return;
+  }
+
+  const eventName = detail.eventType === 'sunrise' ? '朝霞' : '晚霞';
+  const bearing = city.strictMeta?.[detail.eventType === 'sunrise' ? 'sunriseBearing' : 'sunsetBearing'];
+  meta.textContent = `${eventName}光路 · 方位角 ${bearing?.toFixed(1) ?? '—'}° · 采样 ${profile.length} 点 · 主导层 ${detail.dominantLayer?.pressureLevel ?? '—'} hPa`;
+
+  const width = 780;
+  const height = 280;
+  const padL = 58;
+  const padR = 18;
+  const padT = 16;
+  const padB = 32;
+  const plotW = width - padL - padR;
+  const plotH = height - padT - padB;
+  const bandLevels = [1000, 925, 850, 700, 600, 500, 400];
+  const bandH = plotH / bandLevels.length;
+  const maxDist = Math.max(...profile.map((p) => p.distanceKm));
+  const xFor = (d) => padL + (d / maxDist) * plotW;
+  const yFor = (km) => padT + plotH - Math.min(Math.max(km, 0), 10) / 10 * plotH;
+  const originY = padT + plotH + 2;
+  const originX = padL - 6;
+
+  const rects = [];
+  const rayPoints = [];
+
+  profile.forEach((point, idx) => {
+    const x = xFor(point.distanceKm);
+    const cellW = profile.length === 1 ? plotW : plotW / (profile.length - 1) * 0.72;
+    point.layers.forEach((layer, layerIdx) => {
+      const y = padT + layerIdx * bandH;
+      rects.push(`
+        <rect x="${(x - cellW / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${cellW.toFixed(1)}" height="${bandH.toFixed(1)}" fill="${pressureLevelColor(layer.level, layer.cloudCover)}" opacity="${layer.hasCloud ? 1 : 0.18}"></rect>
+      `);
+    });
+    const rayY = yFor(point.cloudBaseKm ?? 0.35);
+    rayPoints.push(`${x.toFixed(1)},${rayY.toFixed(1)}`);
+  });
+
+  const rayLine = `<polyline class="path-ray" points="${rayPoints.join(' ')}"></polyline>`;
+  const origin = `<circle class="path-origin" cx="${originX}" cy="${originY}" r="5"></circle><text x="${originX + 10}" y="${originY + 4}" class="path-axis-label">城市</text>`;
+  const xLabels = profile.map((point) => `<text x="${xFor(point.distanceKm).toFixed(1)}" y="${height - 10}" text-anchor="middle" class="path-axis-label">${point.distanceKm} km</text>`).join('');
+  const bandLabels = bandLevels.map((level, idx) => {
+    const y = padT + idx * bandH + bandH / 2 + 3;
+    return `<text x="12" y="${y.toFixed(1)}" class="path-band-label">${level}hPa</text>`;
+  }).join('');
+
+  const topSummary = profile.slice(0, 4).map((point) => {
+    const d = point.distanceKm.toFixed(0);
+    const dom = point.dominantLevel ? `${point.dominantLevel}hPa` : '—';
+    const sc = point.score.toFixed(2);
+    return `${d}km ${dom} ${sc}`;
+  }).join(' · ');
+
+  root.innerHTML = `
+    <svg viewBox="0 0 ${width} ${height}" class="path-svg" role="img" aria-label="光路分层剖面">
+      <rect x="${padL}" y="${padT}" width="${plotW}" height="${plotH}" rx="10" fill="rgba(255,255,255,0.02)" stroke="rgba(255,255,255,0.06)"></rect>
+      ${bandLabels}
+      ${rects.join('')}
+      ${rayLine}
+      ${origin}
+      ${xLabels}
+    </svg>
+    <div class="path-empty" style="margin-top:8px">${topSummary}</div>
+  `;
 }
 
 function hydrateCityStates(payload) {
@@ -308,12 +411,15 @@ function renderPanel(city) {
   const dominant = best?.detail?.dominantLayer;
   const dominantText = dominant?.layer === 'low' ? '低云为主' : dominant?.layer === 'mid' ? '中云为主' : dominant?.layer === 'high' ? '高云为主' : '混合云';
   document.getElementById('panel-dominant-layer').textContent = `${dominantText} / ${dominant?.heightKm?.toFixed(1) ?? '—'} km`;
+  const pathTitle = document.getElementById('panel-path-title');
+  if (pathTitle) pathTitle.textContent = `${best?.detail?.eventType === 'sunrise' ? '朝霞' : '晚霞'}光路分层剖面`;
   document.getElementById('panel-aod').textContent = best?.detail?.aod != null ? best.detail.aod.toFixed(3) : '—';
   document.getElementById('panel-aod-label').textContent = aodLabel(best?.detail?.aod ?? 0);
   document.getElementById('panel-cloud-low').textContent = `${Math.round(best?.detail?.cloudLow ?? 0)}%`;
   document.getElementById('panel-cloud-mid').textContent = `${Math.round(best?.detail?.cloudMid ?? 0)}%`;
   document.getElementById('panel-cloud-high').textContent = `${Math.round(best?.detail?.cloudHigh ?? 0)}%`;
 
+  renderPathDiagram(city);
   renderChart(city);
   renderDailyList(city);
 }

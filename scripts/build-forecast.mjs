@@ -152,6 +152,14 @@ function samplePointScore(samplePoint, index, distanceKm) {
     });
   }
 
+  const layers = states.map((state) => ({
+    level: state.level,
+    rh: state.rh,
+    cloudCover: state.cloudCover,
+    heightKm: state.heightKm,
+    hasCloud: state.hasCloud,
+  }));
+
   if (!cloudCandidates.length) {
     return {
       score: 0,
@@ -161,6 +169,7 @@ function samplePointScore(samplePoint, index, distanceKm) {
       cloudLow: states.find((s) => s.level === 1000)?.cloudCover ?? 0,
       cloudMid: states.find((s) => s.level === 700)?.cloudCover ?? 0,
       cloudHigh: states.find((s) => s.level === 500)?.cloudCover ?? 0,
+      layers,
     };
   }
 
@@ -173,6 +182,7 @@ function samplePointScore(samplePoint, index, distanceKm) {
     cloudLow: states.find((s) => s.level === 1000)?.cloudCover ?? 0,
     cloudMid: states.find((s) => s.level === 700)?.cloudCover ?? 0,
     cloudHigh: states.find((s) => s.level === 500)?.cloudCover ?? 0,
+    layers,
   };
 }
 
@@ -214,6 +224,15 @@ function evaluateEventAtHour({ city, baseWeather, sampleData, index, eventType, 
   const raw = (0.62 * topMean + 0.38 * coverage) * tf * clarity;
   const finalScore = clamp(raw * 5.2, 0, 5);
 
+  const pathProfile = pointScores.map((point, pIdx) => ({
+    distanceKm: SAMPLE_DISTANCES_KM[pIdx],
+    score: point.score,
+    dominantLevel: point.dominant,
+    cloudBaseKm: point.cloudBaseKm,
+    lowerBlock: point.lowerBlock,
+    layers: point.layers,
+  }));
+
   return {
     score: finalScore,
     eventType,
@@ -233,6 +252,7 @@ function evaluateEventAtHour({ city, baseWeather, sampleData, index, eventType, 
       pressureLevel: dominantLevel,
       heightKm: cloudBaseKm ?? null,
     },
+    pathProfile,
     strict: {
       algorithm: 'ray-path-humidity-v1',
       samplePoints: SAMPLE_DISTANCES_KM.length,
@@ -451,7 +471,6 @@ const payload = {
   generatedAt: new Date().toISOString(),
   source: 'open-meteo-gfs-strict',
   algorithm: 'ray-path-humidity-v1',
-  tutorial: 'https://www.sunsetbot.top/halo/posts/2026/huo-shao-yun-yu-bao-jiao-cheng-zhang-jie-yi/',
   notes: '严格版：分层湿度 + 太阳方位光路采样 + 地球曲率照亮判别',
   cities,
 };
