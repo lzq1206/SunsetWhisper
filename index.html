@@ -121,7 +121,7 @@
 
         <section id="about-section">
           <strong>方法说明</strong><br>
-          采用 GFS 分层湿度 + 分层云量 + AOD，并沿日出/日落太阳方位角方向做光路采样，结合地球曲率判别可照亮区。<br>
+          采用 GFS 分层湿度 + 分层云量 + AOD，以观测城市云底为起点构造抛物线路径，沿路径检查分层湿度；若路径点 RH ≥ 80，则判为遮挡。<br>
           页面每天自动重算，并在 GitHub Actions 中刷新静态数据。
         </section>
       </aside>

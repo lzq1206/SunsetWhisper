@@ -12,7 +12,7 @@ import {
 'use strict';
 
 const STATIC_DATA_URL = './data/latest.json';
-const CACHE_KEY = 'sunsetwhisper.static-cache.v2';
+const CACHE_KEY = 'sunsetwhisper.static-cache.v3';
 const CACHE_TTL_MS = 3 * 60 * 60 * 1000;
 const OPEN_METEO_URL = 'https://api.open-meteo.com/v1/gfs';
 const AIR_QUALITY_URL = 'https://air-quality-api.open-meteo.com/v1/air-quality';
@@ -85,8 +85,8 @@ function pressureLevelLabel(level) {
   return '高层';
 }
 
-function pressureLevelColor(level, cloudCover) {
-  const opacity = Math.max(0.08, Math.min(0.9, (cloudCover ?? 0) / 100));
+function pressureLevelColor(level, rh) {
+  const opacity = Math.max(0.08, Math.min(0.92, (rh ?? 0) / 100));
   const palette = {
     1000: `rgba(96, 165, 250, ${opacity})`,
     925: `rgba(56, 189, 248, ${opacity})`,
@@ -116,7 +116,8 @@ function renderPathDiagram(city) {
 
   const eventName = detail.eventType === 'sunrise' ? '朝霞' : '晚霞';
   const bearing = city.strictMeta?.[detail.eventType === 'sunrise' ? 'sunriseBearing' : 'sunsetBearing'];
-  meta.textContent = `${eventName}光路 · 方位角 ${bearing?.toFixed(1) ?? '—'}° · 采样 ${profile.length} 点 · 主导层 ${detail.dominantLayer?.pressureLevel ?? '—'} hPa`;
+  const blockedText = detail.blockedCount ? `遮挡点 ${detail.blockedCount}/${profile.length}` : '未触发 RH80 遮挡';
+  meta.textContent = `${eventName}抛物线 · 方位角 ${bearing?.toFixed(1) ?? '—'}° · 云底 ${detail.dominantLayer?.heightKm?.toFixed(1) ?? '—'} km · ${blockedText}`;
 
   const width = 780;
   const height = 280;
@@ -135,23 +136,25 @@ function renderPathDiagram(city) {
   const originX = padL - 6;
 
   const rects = [];
-  const rayPoints = [];
+  const curvePoints = [];
+  const curveMarkers = [];
 
-  profile.forEach((point, idx) => {
+  profile.forEach((point) => {
     const x = xFor(point.distanceKm);
     const cellW = profile.length === 1 ? plotW : plotW / (profile.length - 1) * 0.72;
     point.layers.forEach((layer, layerIdx) => {
       const y = padT + layerIdx * bandH;
       rects.push(`
-        <rect x="${(x - cellW / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${cellW.toFixed(1)}" height="${bandH.toFixed(1)}" fill="${pressureLevelColor(layer.level, layer.cloudCover)}" opacity="${layer.hasCloud ? 1 : 0.18}"></rect>
+        <rect x="${(x - cellW / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${cellW.toFixed(1)}" height="${bandH.toFixed(1)}" fill="${pressureLevelColor(layer.level, layer.rh)}" opacity="${layer.rh >= 80 ? 1 : 0.16}"></rect>
       `);
     });
-    const rayY = yFor(point.cloudBaseKm ?? 0.35);
-    rayPoints.push(`${x.toFixed(1)},${rayY.toFixed(1)}`);
+    const rayY = yFor(point.curveHeightKm ?? 0.35);
+    curvePoints.push(`${x.toFixed(1)},${rayY.toFixed(1)}`);
+    curveMarkers.push(`<circle cx="${x.toFixed(1)}" cy="${rayY.toFixed(1)}" r="${point.blocked ? 4.6 : 2.8}" fill="${point.blocked ? '#ff4d4f' : '#7bd989'}" stroke="#fff" stroke-width="0.8"></circle>`);
   });
 
-  const rayLine = `<polyline class="path-ray" points="${rayPoints.join(' ')}"></polyline>`;
-  const origin = `<circle class="path-origin" cx="${originX}" cy="${originY}" r="5"></circle><text x="${originX + 10}" y="${originY + 4}" class="path-axis-label">城市</text>`;
+  const curveLine = `<polyline class="path-ray" points="${curvePoints.join(' ')}"></polyline>`;
+  const origin = `<circle class="path-origin" cx="${originX}" cy="${originY}" r="5"></circle><text x="${originX + 10}" y="${originY + 4}" class="path-axis-label">城市云底</text>`;
   const xLabels = profile.map((point) => `<text x="${xFor(point.distanceKm).toFixed(1)}" y="${height - 10}" text-anchor="middle" class="path-axis-label">${point.distanceKm} km</text>`).join('');
   const bandLabels = bandLevels.map((level, idx) => {
     const y = padT + idx * bandH + bandH / 2 + 3;
@@ -160,17 +163,19 @@ function renderPathDiagram(city) {
 
   const topSummary = profile.slice(0, 4).map((point) => {
     const d = point.distanceKm.toFixed(0);
-    const dom = point.dominantLevel ? `${point.dominantLevel}hPa` : '—';
-    const sc = point.score.toFixed(2);
-    return `${d}km ${dom} ${sc}`;
+    const h = point.curveHeightKm?.toFixed(2) ?? '—';
+    const rh = point.curveHumidity?.toFixed(0) ?? '—';
+    const flag = point.blocked ? '阻' : '通';
+    return `${d}km ${h}km RH${rh} ${flag}`;
   }).join(' · ');
 
   root.innerHTML = `
-    <svg viewBox="0 0 ${width} ${height}" class="path-svg" role="img" aria-label="光路分层剖面">
+    <svg viewBox="0 0 ${width} ${height}" class="path-svg" role="img" aria-label="抛物线光路分层剖面">
       <rect x="${padL}" y="${padT}" width="${plotW}" height="${plotH}" rx="10" fill="rgba(255,255,255,0.02)" stroke="rgba(255,255,255,0.06)"></rect>
       ${bandLabels}
       ${rects.join('')}
-      ${rayLine}
+      ${curveLine}
+      ${curveMarkers.join('')}
       ${origin}
       ${xLabels}
     </svg>

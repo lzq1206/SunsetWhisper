@@ -22,14 +22,21 @@ const BASE_WEATHER_VARS = [
 const AIR_QUALITY_VARS = 'aerosol_optical_depth';
 
 const PRESSURE_LEVELS = [1000, 925, 850, 700, 600, 500, 400];
-const SAMPLE_DISTANCES_KM = [40, 80, 120, 180, 240, 320, 420, 560];
-const CONCURRENCY = 6;
+const SAMPLE_DISTANCES_KM = [0, 60, 120, 220, 360, 540];
+const CONCURRENCY = 2;
 const EARTH_RADIUS_KM = 6371;
 
 globalThis.SunCalc = SunCalc;
 
 const { CITIES } = await import('../js/cities.js');
 const { parseForecastTime, localDayKey } = await import('../js/forecast-core.js');
+
+let previousPayload = null;
+try {
+  previousPayload = JSON.parse(await fs.readFile(path.join(ROOT, 'data', 'latest.json'), 'utf8'));
+} catch {
+  previousPayload = null;
+}
 
 function clamp(v, min, max) {
   return Math.min(max, Math.max(min, v));
@@ -39,18 +46,26 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function fetchJson(url, retries = 2) {
+async function fetchJson(url, retries = 4) {
   let lastError = null;
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     try {
       const response = await fetch(url, {
         headers: { 'user-agent': 'SunsetWhisper/1.0 (+https://github.com/lzq1206/SunsetWhisper)' },
       });
-      if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+      if (!response.ok) {
+        const retryAfter = Number(response.headers.get('retry-after') ?? '0');
+        const waitMs = retryAfter > 0 ? retryAfter * 1000 : 1200 * (attempt + 1);
+        if (response.status === 429 && attempt < retries) {
+          await sleep(waitMs);
+          continue;
+        }
+        throw new Error(`${response.status} ${response.statusText}`);
+      }
       return await response.json();
     } catch (error) {
       lastError = error;
-      if (attempt < retries) await sleep(900 * (attempt + 1));
+      if (attempt < retries) await sleep(1200 * (attempt + 1));
     }
   }
   throw lastError;
@@ -117,84 +132,109 @@ const THRESHOLDS = {
   lowerBlock: { rh: 80, cloudCover: 15 },
 };
 
-function samplePointScore(samplePoint, index, distanceKm) {
-  const states = [];
+function layerDefaultHeightKm(level) {
+  if (level >= 1000) return 0.1;
+  if (level >= 925) return 0.8;
+  if (level >= 850) return 1.5;
+  if (level >= 700) return 3.0;
+  if (level >= 600) return 4.5;
+  if (level >= 500) return 6.0;
+  return 8.0;
+}
 
+function estimateCloudBase(layers) {
+  const present = layers.filter((layer) => layer.rh >= THRESHOLDS.cloudPresent.rh && layer.cloudCover >= THRESHOLDS.cloudPresent.cloudCover);
+  if (present.length) {
+    return {
+      cloudBaseKm: present[0].heightKm,
+      source: 'observed',
+    };
+  }
+
+  const softer = layers.filter((layer) => layer.rh >= 70 && layer.cloudCover >= 5);
+  if (softer.length) {
+    return {
+      cloudBaseKm: softer[0].heightKm,
+      source: 'soft-rh70',
+    };
+  }
+
+  return {
+    cloudBaseKm: 1.5,
+    source: 'fallback-1.5km',
+  };
+}
+
+function interpolateHumidity(layers, heightKm) {
+  if (!layers.length) return 0;
+  const sorted = [...layers].sort((a, b) => a.heightKm - b.heightKm);
+  if (heightKm <= sorted[0].heightKm) return sorted[0].rh;
+  if (heightKm >= sorted[sorted.length - 1].heightKm) return sorted[sorted.length - 1].rh;
+
+  for (let i = 0; i < sorted.length - 1; i += 1) {
+    const low = sorted[i];
+    const high = sorted[i + 1];
+    if (low.heightKm <= heightKm && heightKm <= high.heightKm) {
+      const span = Math.max(high.heightKm - low.heightKm, 1e-6);
+      const t = (heightKm - low.heightKm) / span;
+      return low.rh + t * (high.rh - low.rh);
+    }
+  }
+
+  return sorted[sorted.length - 1].rh;
+}
+
+function makeLayerState(samplePoint, index) {
+  const layers = [];
   for (const lv of PRESSURE_LEVELS) {
     const rh = samplePoint.hourly?.[`relative_humidity_${lv}hPa`]?.[index];
     const cc = samplePoint.hourly?.[`cloud_cover_${lv}hPa`]?.[index];
     const gh = samplePoint.hourly?.[`geopotential_height_${lv}hPa`]?.[index];
-    const heightKm = gh != null ? gh / 1000 : (lv <= 850 ? 1.8 : lv <= 600 ? 4.5 : 8.0);
-
+    const heightKm = gh != null ? gh / 1000 : layerDefaultHeightKm(lv);
     const humidity = rh ?? 0;
     const cloudCover = cc ?? 0;
-    const hasCloud = humidity >= THRESHOLDS.cloudPresent.rh && cloudCover >= THRESHOLDS.cloudPresent.cloudCover;
-    const blocksLight = humidity >= THRESHOLDS.cloudBlock.rh && cloudCover >= THRESHOLDS.cloudBlock.cloudCover;
-
-    states.push({
+    layers.push({
       level: lv,
       rh: humidity,
       cloudCover,
       heightKm,
-      hasCloud,
-      blocksLight,
+      hasCloud: humidity >= THRESHOLDS.cloudPresent.rh && cloudCover >= THRESHOLDS.cloudPresent.cloudCover,
     });
   }
+  return layers;
+}
 
-  const cloudCandidates = [];
-  for (const state of states) {
-    if (!state.hasCloud) continue;
-    const dMax = illuminationDistance(state.heightKm);
-    if (distanceKm > dMax) continue;
+function parabolaHeightKm(distanceKm, cloudBaseKm, sunAltitudeDeg) {
+  const slope = Math.tan(clamp(Math.abs(sunAltitudeDeg), 0.4, 5.0) * Math.PI / 180);
+  const curvature = (distanceKm * distanceKm) / (2 * EARTH_RADIUS_KM);
+  return cloudBaseKm + distanceKm * slope + curvature;
+}
 
-    const lowerBlock = states
-      .filter((s) => s.blocksLight && s.heightKm < state.heightKm)
-      .reduce((mx, s) => Math.max(mx, s.cloudCover), 0);
+function samplePointScore(samplePoint, index, distanceKm, curveHeightKm) {
+  const layers = makeLayerState(samplePoint, index);
+  const cloudBase = estimateCloudBase(layers);
+  const curveHumidity = interpolateHumidity(layers, curveHeightKm);
+  const blocked = curveHumidity >= 80;
 
-    const transmittance = 1 - clamp(lowerBlock / 100, 0, 0.85);
-    const humidityFactor = clamp((state.rh - THRESHOLDS.cloudPresent.rh) / (100 - THRESHOLDS.cloudPresent.rh), 0, 1);
-    const cloudFactor = clamp(state.cloudCover / 100, 0, 1);
+  const blockingLayers = layers.filter((layer) => layer.rh >= THRESHOLDS.cloudBlock.rh && layer.cloudCover >= THRESHOLDS.cloudBlock.cloudCover);
+  const blockStrength = blockingLayers.reduce((sum, layer) => sum + layer.cloudCover / 100, 0);
+  const clearFactor = clamp((80 - curveHumidity) / 80, 0, 1);
+  const layerFactor = clamp(1 - blockStrength * 0.55, 0, 1);
 
-    cloudCandidates.push({
-      ...state,
-      lowerBlock,
-      transmittance,
-      score: cloudFactor * humidityFactor * transmittance * levelWeight(state.level),
-      dMax,
-    });
-  }
+  const rawScore = clearFactor * layerFactor;
 
-  const layers = states.map((state) => ({
-    level: state.level,
-    rh: state.rh,
-    cloudCover: state.cloudCover,
-    heightKm: state.heightKm,
-    hasCloud: state.hasCloud,
-  }));
-
-  if (!cloudCandidates.length) {
-    return {
-      score: 0,
-      cloudBaseKm: null,
-      dominant: null,
-      lowerBlock: 0,
-      cloudLow: states.find((s) => s.level === 1000)?.cloudCover ?? 0,
-      cloudMid: states.find((s) => s.level === 700)?.cloudCover ?? 0,
-      cloudHigh: states.find((s) => s.level === 500)?.cloudCover ?? 0,
-      layers,
-    };
-  }
-
-  const best = cloudCandidates.sort((a, b) => b.score - a.score)[0];
   return {
-    score: best.score,
-    cloudBaseKm: best.heightKm,
-    dominant: best.level,
-    lowerBlock: best.lowerBlock,
-    cloudLow: states.find((s) => s.level === 1000)?.cloudCover ?? 0,
-    cloudMid: states.find((s) => s.level === 700)?.cloudCover ?? 0,
-    cloudHigh: states.find((s) => s.level === 500)?.cloudCover ?? 0,
+    score: rawScore,
+    cloudBaseKm: cloudBase.cloudBaseKm,
+    cloudBaseSource: cloudBase.source,
+    curveHeightKm,
+    curveHumidity,
+    blocked,
+    humidityMargin: 80 - curveHumidity,
     layers,
+    cloudLow: layers.find((s) => s.level === 1000)?.cloudCover ?? 0,
+    cloudMid: layers.find((s) => s.level === 700)?.cloudCover ?? 0,
+    cloudHigh: layers.find((s) => s.level === 500)?.cloudCover ?? 0,
   };
 }
 
@@ -213,37 +253,35 @@ function evaluateEventAtHour({ city, baseWeather, sampleData, index, eventType, 
     };
   }
 
-  const pointScores = sampleData[eventType].map((pt, pIdx) => samplePointScore(pt, index, SAMPLE_DISTANCES_KM[pIdx]));
-  const validScores = pointScores.map((x) => x.score).filter((x) => x > 0);
-  const coverage = pointScores.filter((x) => x.score > 0.15).length / pointScores.length;
-  const topMean = validScores.length
-    ? validScores.sort((a, b) => b - a).slice(0, 3).reduce((s, v) => s + v, 0) / Math.min(3, validScores.length)
-    : 0;
+  const sunPos = SunCalc.getPosition(eventTime, city.lat, city.lon);
+  const sunAltitudeDeg = sunPos.altitude * 180 / Math.PI;
+  const localLayers = makeLayerState(sampleData.local, index);
+  const cloudBase = estimateCloudBase(localLayers);
+  const cloudBaseKm = cloudBase.cloudBaseKm;
 
-  const baseHeights = pointScores.map((x) => x.cloudBaseKm).filter((x) => x != null).sort((a, b) => a - b);
-  const cloudBaseKm = baseHeights.length ? baseHeights[Math.floor(baseHeights.length / 2)] : null;
+  const pathProfile = sampleData[eventType].map((pt, pIdx) => {
+    const distanceKm = SAMPLE_DISTANCES_KM[pIdx];
+    const curveHeightKm = parabolaHeightKm(distanceKm, cloudBaseKm, sunAltitudeDeg);
+    const sample = samplePointScore(pt, index, distanceKm, curveHeightKm);
+    return {
+      distanceKm,
+      curveHeightKm,
+      ...sample,
+    };
+  });
 
-  const dominantLevel = pointScores
-    .map((x) => x.dominant)
-    .filter((x) => x != null)
-    .sort((a, b) => a - b)[0] ?? null;
-
-  const lowBlock = pointScores.reduce((s, x) => s + (x.lowerBlock ?? 0), 0) / pointScores.length;
-
+  const blockedCount = pathProfile.filter((point) => point.blocked).length;
+  const blockedRatio = blockedCount / Math.max(pathProfile.length, 1);
+  const meanClear = pathProfile.reduce((sum, point) => sum + clamp((80 - point.curveHumidity) / 80, 0, 1), 0) / Math.max(pathProfile.length, 1);
+  const bestClearPoints = [...pathProfile].sort((a, b) => b.score - a.score).slice(0, 3);
+  const pathScore = bestClearPoints.reduce((sum, point) => sum + point.score, 0) / Math.max(bestClearPoints.length, 1);
   const aod = hourly.aerosol_optical_depth?.[index] ?? 0.2;
   const clarity = aodClarity(aod);
+  const finalScore = clamp((0.65 * meanClear + 0.35 * pathScore) * (1 - blockedRatio * 0.95) * tf * clarity * 5.0, 0, 5);
 
-  const raw = (0.62 * topMean + 0.38 * coverage) * tf * clarity;
-  const finalScore = clamp(raw * 5.2, 0, 5);
-
-  const pathProfile = pointScores.map((point, pIdx) => ({
-    distanceKm: SAMPLE_DISTANCES_KM[pIdx],
-    score: point.score,
-    dominantLevel: point.dominant,
-    cloudBaseKm: point.cloudBaseKm,
-    lowerBlock: point.lowerBlock,
-    layers: point.layers,
-  }));
+  const dominantLayer = localLayers
+    .filter((layer) => layer.rh >= THRESHOLDS.cloudBlock.rh)
+    .sort((a, b) => a.heightKm - b.heightKm)[0] ?? null;
 
   return {
     score: finalScore,
@@ -255,20 +293,25 @@ function evaluateEventAtHour({ city, baseWeather, sampleData, index, eventType, 
     cloudHigh: hourly.cloud_cover_high?.[index] ?? 0,
     aod,
     aodMult: clarity,
-    lowBlock,
-    rawScore: raw,
-    coverage,
-    pathMean: topMean,
+    lowBlock: blockedRatio * 100,
+    rawScore: pathScore,
+    coverage: 1 - blockedRatio,
+    pathMean: meanClear,
     dominantLayer: {
-      layer: dominantLevel == null ? 'mixed' : dominantLevel >= 700 ? 'low-mid' : 'mid-high',
-      pressureLevel: dominantLevel,
+      layer: dominantLayer == null ? cloudBase.source : dominantLayer.level >= 700 ? 'low-mid' : 'high',
+      pressureLevel: dominantLayer?.level ?? null,
       heightKm: cloudBaseKm ?? null,
     },
+    cloudBaseSource: cloudBase.source,
+    sunAltitudeDeg,
+    blockedCount,
+    blockedRatio,
     pathProfile,
     strict: {
-      algorithm: 'ray-path-humidity-v1',
+      algorithm: 'parabola-rh80-v2',
       samplePoints: SAMPLE_DISTANCES_KM.length,
       pathDistancesKm: SAMPLE_DISTANCES_KM,
+      rhThreshold: 80,
     },
   };
 }
@@ -385,12 +428,14 @@ async function fetchPathSamples(city, weather) {
   const sunrisePoints = SAMPLE_DISTANCES_KM.map((d) => destinationPoint(city.lat, city.lon, sunriseBearing, d));
   const sunsetPoints = SAMPLE_DISTANCES_KM.map((d) => destinationPoint(city.lat, city.lon, sunsetBearing, d));
 
-  const [sunriseData, sunsetData] = await Promise.all([
-    Promise.all(sunrisePoints.map((p) => fetchPressurePoint(p))),
-    Promise.all(sunsetPoints.map((p) => fetchPressurePoint(p))),
+  const [local, sunriseData, sunsetData] = await Promise.all([
+    fetchPressurePoint(city),
+    runWithLimit(sunrisePoints, 2, fetchPressurePoint),
+    runWithLimit(sunsetPoints, 2, fetchPressurePoint),
   ]);
 
   return {
+    local,
     sunrise: sunriseData,
     sunset: sunsetData,
     bearings: { sunrise: sunriseBearing, sunset: sunsetBearing },
@@ -426,6 +471,15 @@ async function fetchCity(city) {
     },
     };
   } catch (error) {
+    const fallback = previousPayload?.cities?.find((item) => item.id === city.id);
+    if (fallback) {
+      return {
+        ...fallback,
+        source: 'cache-fallback',
+        error: String(error),
+      };
+    }
+
     return {
       id: city.id,
       name: city.name,
@@ -457,6 +511,19 @@ async function runWithLimit(items, limit, worker) {
   return results;
 }
 
+async function runBatched(items, limit, batchSize, pauseMs, worker) {
+  const results = [];
+  for (let start = 0; start < items.length; start += batchSize) {
+    const batch = items.slice(start, start + batchSize);
+    const batchResults = await runWithLimit(batch, limit, worker);
+    results.push(...batchResults);
+    if (start + batchSize < items.length) {
+      await sleep(pauseMs);
+    }
+  }
+  return results;
+}
+
 async function copyRecursive(src, dest) {
   const stat = await fs.stat(src);
   if (stat.isDirectory()) {
@@ -478,7 +545,7 @@ await copyRecursive(path.join(ROOT, 'css'), path.join(DIST, 'css'));
 await copyRecursive(path.join(ROOT, 'js'), path.join(DIST, 'js'));
 await fs.writeFile(path.join(DIST, '.nojekyll'), '', 'utf8');
 
-const cities = await runWithLimit(CITIES, CONCURRENCY, fetchCity);
+const cities = await runBatched(CITIES, CONCURRENCY, 4, 4000, fetchCity);
 
 const payload = {
   generatedAt: new Date().toISOString(),
