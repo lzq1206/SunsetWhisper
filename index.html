@@ -115,7 +115,7 @@
 
         <section id="about-section">
           <strong>方法说明</strong><br>
-          采用 GFS 分层云量（低 / 中 / 高）与气溶胶光学厚度 AOD，结合火烧云几何模型估计朝霞 / 晚霞强度。<br>
+          采用 GFS 分层湿度 + 分层云量 + AOD，并沿日出/日落太阳方位角方向做光路采样，结合地球曲率判别可照亮区。<br>
           页面每天自动重算，并在 GitHub Actions 中刷新静态数据。<br>
           参考：
           <a href="https://www.sunsetbot.top/halo/posts/2026/huo-shao-yun-yu-bao-jiao-cheng-zhang-jie-yi/" target="_blank" rel="noopener">火烧云定量预报教程</a>
