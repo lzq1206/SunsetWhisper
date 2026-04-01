@@ -111,6 +111,12 @@ function illuminationDistance(heightKm) {
   return Math.sqrt(2 * EARTH_RADIUS_KM * Math.max(heightKm, 0.2));
 }
 
+const THRESHOLDS = {
+  cloudPresent: { rh: 78, cloudCover: 8 },
+  cloudBlock: { rh: 82, cloudCover: 20 },
+  lowerBlock: { rh: 80, cloudCover: 15 },
+};
+
 function samplePointScore(samplePoint, index, distanceKm) {
   const states = [];
 
@@ -120,12 +126,18 @@ function samplePointScore(samplePoint, index, distanceKm) {
     const gh = samplePoint.hourly?.[`geopotential_height_${lv}hPa`]?.[index];
     const heightKm = gh != null ? gh / 1000 : (lv <= 850 ? 1.8 : lv <= 600 ? 4.5 : 8.0);
 
+    const humidity = rh ?? 0;
+    const cloudCover = cc ?? 0;
+    const hasCloud = humidity >= THRESHOLDS.cloudPresent.rh && cloudCover >= THRESHOLDS.cloudPresent.cloudCover;
+    const blocksLight = humidity >= THRESHOLDS.cloudBlock.rh && cloudCover >= THRESHOLDS.cloudBlock.cloudCover;
+
     states.push({
       level: lv,
-      rh: rh ?? 0,
-      cloudCover: cc ?? 0,
+      rh: humidity,
+      cloudCover,
       heightKm,
-      hasCloud: (rh ?? 0) >= 82 && (cc ?? 0) >= 12,
+      hasCloud,
+      blocksLight,
     });
   }
 
@@ -136,11 +148,11 @@ function samplePointScore(samplePoint, index, distanceKm) {
     if (distanceKm > dMax) continue;
 
     const lowerBlock = states
-      .filter((s) => s.hasCloud && s.heightKm < state.heightKm)
+      .filter((s) => s.blocksLight && s.heightKm < state.heightKm)
       .reduce((mx, s) => Math.max(mx, s.cloudCover), 0);
 
     const transmittance = 1 - clamp(lowerBlock / 100, 0, 0.85);
-    const humidityFactor = clamp((state.rh - 75) / 25, 0, 1);
+    const humidityFactor = clamp((state.rh - THRESHOLDS.cloudPresent.rh) / (100 - THRESHOLDS.cloudPresent.rh), 0, 1);
     const cloudFactor = clamp(state.cloudCover / 100, 0, 1);
 
     cloudCandidates.push({
@@ -405,12 +417,13 @@ async function fetchCity(city) {
       bestEventType: best?.detail?.eventType ?? null,
       bestEventTime: best?.detail?.eventTime ?? null,
       strictMeta: {
-        model: 'ray-path-humidity-v1',
-        pressureLevels: PRESSURE_LEVELS,
-        sampleDistancesKm: SAMPLE_DISTANCES_KM,
-        sunriseBearing: sampleData.bearings.sunrise,
-        sunsetBearing: sampleData.bearings.sunset,
-      },
+      model: 'ray-path-humidity-v1',
+      pressureLevels: PRESSURE_LEVELS,
+      sampleDistancesKm: SAMPLE_DISTANCES_KM,
+      sunriseBearing: sampleData.bearings.sunrise,
+      sunsetBearing: sampleData.bearings.sunset,
+      thresholds: THRESHOLDS,
+    },
     };
   } catch (error) {
     return {
@@ -471,6 +484,7 @@ const payload = {
   generatedAt: new Date().toISOString(),
   source: 'open-meteo-gfs-strict',
   algorithm: 'ray-path-humidity-v1',
+  thresholds: THRESHOLDS,
   notes: '严格版：分层湿度 + 太阳方位光路采样 + 地球曲率照亮判别',
   cities,
 };
