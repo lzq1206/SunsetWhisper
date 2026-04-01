@@ -84,6 +84,14 @@ python3 -m http.server 8080
 # 然后访问 http://localhost:8080
 ```
 
+## GitHub Pages 部署
+
+本项目通过 GitHub Actions 自动部署到 GitHub Pages。首次使用需要：
+
+1. 进入仓库 **Settings → Pages**
+2. 将 Source 设置为 **GitHub Actions**
+3. 将 PR 合并到 `main` 分支后，工作流将自动运行并部署
+
 ## 参考资料
 
 - [火烧云定量预报速成教程](https://www.sunsetbot.top/halo/posts/2026/huo-shao-yun-yu-bao-jiao-cheng-zhang-jie-yi/) — 第一章：大气科学常识、几何知识
