@@ -21,4 +21,3 @@ npm run build
 
 - 数据源：Open-Meteo GFS 与 Air Quality API
 - 分层变量：`relative_humidity_*hPa`、`cloud_cover_*hPa`、`geopotential_height_*hPa`
-- 教程参考：<https://www.sunsetbot.top/halo/posts/2026/huo-shao-yun-yu-bao-jiao-cheng-zhang-jie-yi/>
