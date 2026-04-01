@@ -44,7 +44,7 @@ const CITIES = [
   { id: 'wuxi',        name: '无锡',   lat: 31.57, lon: 120.30, province: '江苏' },
   { id: 'yangzhou',    name: '扬州',   lat: 32.39, lon: 119.41, province: '江苏' },
   { id: 'nantong',     name: '南通',   lat: 31.98, lon: 120.89, province: '江苏' },
-  { id: 'hefei2',      name: '芜湖',   lat: 31.34, lon: 118.36, province: '安徽' },
+  { id: 'wuhu',        name: '芜湖',   lat: 31.34, lon: 118.36, province: '安徽' },
   { id: 'taian',       name: '泰安',   lat: 36.19, lon: 117.09, province: '山东' },
   { id: 'linyi',       name: '临沂',   lat: 35.06, lon: 118.36, province: '山东' },
   { id: 'yantai',      name: '烟台',   lat: 37.47, lon: 121.45, province: '山东' },
