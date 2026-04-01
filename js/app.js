@@ -1,45 +1,47 @@
-/**
- * SunsetWhisper – Main Application
- *
- * Fetches GFS data via Open-Meteo, computes fire-cloud scores for all cities,
- * renders a Leaflet map, and displays city detail panels with Chart.js charts.
- *
- * Data is cached in localStorage for 6 hours to align with GFS update cycles.
- */
+import { CITIES, CITY_LOOKUP } from './cities.js';
+import {
+  buildCityForecast,
+  scoreLabel,
+  scoreToColor,
+  aodLabel,
+  formatTime,
+  formatAxisTime,
+  formatDate,
+} from './forecast-core.js';
 
 'use strict';
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Constants
-// ──────────────────────────────────────────────────────────────────────────────
-const CACHE_TTL_MS   = 6 * 60 * 60 * 1000; // 6 hours
-const CACHE_KEY      = 'sw_cache_v3';
+const STATIC_DATA_URL = './data/latest.json';
+const CACHE_KEY = 'sunsetwhisper.static-cache.v1';
+const CACHE_TTL_MS = 3 * 60 * 60 * 1000;
 const OPEN_METEO_URL = 'https://api.open-meteo.com/v1/gfs';
 const AIR_QUALITY_URL = 'https://air-quality-api.open-meteo.com/v1/air-quality';
-
-// GFS hourly variables to request
-const WEATHER_VARS = [
-  'cloud_cover',
-  'cloud_cover_low',
-  'cloud_cover_mid',
-  'cloud_cover_high',
-].join(',');
-
+const WEATHER_VARS = ['cloud_cover', 'cloud_cover_low', 'cloud_cover_mid', 'cloud_cover_high'].join(',');
 const AIR_QUALITY_VARS = 'aerosol_optical_depth';
 
-// ──────────────────────────────────────────────────────────────────────────────
-// State
-// ──────────────────────────────────────────────────────────────────────────────
-let map;
+let map = null;
+let chartInstance = null;
 let cityMarkers = {};
 let selectedCityId = null;
-let cityScores = {};    // { cityId: Array<scoreEntry> }
-let chartInstance = null;
+let cityStates = [];
 let refreshTimer = null;
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Map initialisation
-// ──────────────────────────────────────────────────────────────────────────────
+function setLoading(show, text = '正在获取 GFS 分层数据…') {
+  const overlay = document.getElementById('loading-overlay');
+  const label = document.getElementById('loading-text');
+  if (overlay) overlay.style.display = show ? 'flex' : 'none';
+  if (label) label.textContent = text;
+}
+
+function updateDataInfo(payload) {
+  const info = document.getElementById('data-info');
+  const hero = document.getElementById('hero-data-ts');
+  const generatedAt = payload?.generatedAt ? new Date(payload.generatedAt) : new Date();
+  const text = `数据时次：${generatedAt.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })} · 每日自动更新`;
+  if (info) info.textContent = text;
+  if (hero) hero.textContent = generatedAt.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+}
+
 function initMap() {
   map = L.map('map', {
     center: [35.5, 103],
@@ -49,259 +51,169 @@ function initMap() {
   });
 
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution:
-      '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
     maxZoom: 18,
   }).addTo(map);
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Marker helpers
-// ──────────────────────────────────────────────────────────────────────────────
 function createCityIcon(score) {
-  const color   = scoreToColor(score);
   const { label } = scoreLabel(score);
-  const size    = score > 2 ? 38 : 32;
-  const html    = `
-    <div class="city-marker" style="background:${color};width:${size}px;height:${size}px">
-      <span class="marker-label">${label}</span>
-    </div>`;
-  return L.divIcon({ html, className: '', iconSize: [size, size], iconAnchor: [size / 2, size / 2] });
+  const color = scoreToColor(score);
+  const size = score >= 3 ? 40 : 32;
+  return L.divIcon({
+    html: `<div class="city-marker" style="background:${color};width:${size}px;height:${size}px"><span class="marker-label">${label}</span></div>`,
+    className: '',
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+  });
+}
+
+function bestEventLabel(entry) {
+  if (!entry) return '—';
+  const { label } = scoreLabel(entry.score);
+  const when = entry.detail?.eventType === 'sunrise' ? '朝霞' : '晚霞';
+  return `${when} · ${label} ${entry.score.toFixed(2)}`;
+}
+
+function hydrateCityStates(payload) {
+  cityStates = (payload?.cities ?? []).map((city) => {
+    const base = CITY_LOOKUP[city.id] ?? city;
+    const forecast = city.forecast ?? buildCityForecast(base, city.rawWeather);
+    return {
+      ...base,
+      forecast,
+      rawWeather: city.rawWeather,
+      source: city.source ?? 'static',
+    };
+  });
+}
+
+function getCityState(cityId) {
+  return cityStates.find((city) => city.id === cityId) ?? null;
+}
+
+function renderHero() {
+  const today = cityStates
+    .map((city) => ({ city, best: city.forecast.best }))
+    .filter(({ best }) => best)
+    .sort((a, b) => b.best.score - a.best.score);
+
+  const topSunset = today.find(({ best }) => best.detail?.eventType === 'sunset') ?? today[0] ?? null;
+  const topSunrise = today.find(({ best }) => best.detail?.eventType === 'sunrise') ?? today[0] ?? null;
+
+  const sunsetCity = document.getElementById('hero-sunset-city');
+  const sunsetMeta = document.getElementById('hero-sunset-meta');
+  const sunriseCity = document.getElementById('hero-sunrise-city');
+  const sunriseMeta = document.getElementById('hero-sunrise-meta');
+
+  if (topSunset) {
+    sunsetCity.textContent = topSunset.city.name;
+    sunsetMeta.textContent = `${bestEventLabel(topSunset.best)} · ${formatTime(topSunset.best.detail?.eventTime)}`;
+  }
+  if (topSunrise) {
+    sunriseCity.textContent = topSunrise.city.name;
+    sunriseMeta.textContent = `${bestEventLabel(topSunrise.best)} · ${formatTime(topSunrise.best.detail?.eventTime)}`;
+  }
 }
 
 function renderMarkers() {
-  // Remove old markers
-  Object.values(cityMarkers).forEach(m => map.removeLayer(m));
+  Object.values(cityMarkers).forEach((marker) => map.removeLayer(marker));
   cityMarkers = {};
 
-  const now = new Date();
-
-  CITIES.forEach(city => {
-    const series = cityScores[city.id];
-    if (!series) return;
-
-    // Find the score for the nearest upcoming event (within 3 hours)
-    const upcoming = getUpcomingScore(series, now);
-    const score    = upcoming ? upcoming.score : 0;
-
+  cityStates.forEach((city) => {
+    const score = city.forecast.best?.score ?? 0;
     const marker = L.marker([city.lat, city.lon], {
       icon: createCityIcon(score),
       title: city.name,
     });
-
     marker.on('click', () => selectCity(city.id));
-
     marker.bindTooltip(
-      `<b>${city.name}</b><br>鲜艳度 ${score.toFixed(2)} — ${scoreLabel(score).label}`,
-      { direction: 'top', offset: [0, -10] }
+      `<b>${city.name}</b><br>${bestEventLabel(city.forecast.best)}`,
+      { direction: 'top', offset: [0, -10] },
     );
-
     marker.addTo(map);
     cityMarkers[city.id] = marker;
   });
 }
 
-/**
- * Get the peak score entry closest to now (within 3-hour window).
- */
-function getUpcomingScore(series, now) {
-  const windowMs = 3 * 60 * 60 * 1000;
-  let best = null;
-  for (const entry of series) {
-    const diff = entry.time - now;
-    if (diff > -windowMs && diff < windowMs) {
-      if (!best || entry.score > best.score) best = entry;
-    }
-  }
-  return best;
-}
+function renderCityList() {
+  const list = document.getElementById('city-list');
+  if (!list) return;
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Data fetching
-// ──────────────────────────────────────────────────────────────────────────────
+  const ranked = [...cityStates].sort((a, b) => (b.forecast.best?.score ?? 0) - (a.forecast.best?.score ?? 0));
+  list.innerHTML = ranked.map((city) => {
+    const best = city.forecast.best;
+    const { label, css } = scoreLabel(best?.score ?? 0);
+    const eventType = best?.detail?.eventType === 'sunrise' ? '朝霞' : '晚霞';
+    return `
+      <button class="city-list-item" data-id="${city.id}">
+        <span class="city-list-name">
+          <strong>${city.name}</strong>
+          <span>${city.province} · ${eventType}</span>
+        </span>
+        <span class="score-badge ${css} small">${label} ${(best?.score ?? 0).toFixed(1)}</span>
+      </button>
+    `;
+  }).join('');
 
-/**
- * Load from localStorage cache if fresh, else fetch from API.
- */
-async function loadAllCities() {
-  const cached = loadCache();
-  if (cached) {
-    console.log('[SunsetWhisper] Using cached data from', new Date(cached.ts).toLocaleString());
-    processAllCachedData(cached.data);
-    updateDataInfo(new Date(cached.ts));
-    return;
-  }
-
-  await fetchAllCities();
-}
-
-function loadCache() {
-  try {
-    const raw = localStorage.getItem(CACHE_KEY);
-    if (!raw) return null;
-    const obj = JSON.parse(raw);
-    if (Date.now() - obj.ts > CACHE_TTL_MS) return null;
-    return obj;
-  } catch (e) {
-    return null;
-  }
-}
-
-function saveCache(data) {
-  try {
-    localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), data }));
-  } catch (e) {
-    console.warn('[SunsetWhisper] Cache write failed:', e);
-  }
-}
-
-async function fetchAllCities() {
-  showLoading(true);
-  const rawData = {};
-
-  // Fetch in small batches to avoid rate limits
-  const BATCH = 8;
-  for (let i = 0; i < CITIES.length; i += BATCH) {
-    const batch = CITIES.slice(i, i + BATCH);
-    await Promise.all(batch.map(async city => {
-      try {
-        rawData[city.id] = await fetchCityData(city);
-      } catch (err) {
-        console.warn(`[SunsetWhisper] Failed to fetch ${city.name}:`, err);
-        rawData[city.id] = null;
-      }
-    }));
-    updateProgress(Math.min(i + BATCH, CITIES.length), CITIES.length);
-  }
-
-  saveCache(rawData);
-  processAllCachedData(rawData);
-  updateDataInfo(new Date());
-  showLoading(false);
-}
-
-async function fetchCityData(city) {
-  const params = new URLSearchParams({
-    latitude:  city.lat,
-    longitude: city.lon,
-    hourly:    WEATHER_VARS,
-    timezone:  'Asia/Shanghai',
-    forecast_days: 3,
-  });
-
-  const aqParams = new URLSearchParams({
-    latitude:  city.lat,
-    longitude: city.lon,
-    hourly:    AIR_QUALITY_VARS,
-    timezone:  'Asia/Shanghai',
-    forecast_days: 3,
-  });
-
-  const [wxResp, aqResp] = await Promise.all([
-    fetch(`${OPEN_METEO_URL}?${params}`),
-    fetch(`${AIR_QUALITY_URL}?${aqParams}`).catch(() => null),
-  ]);
-
-  const wx = await wxResp.json();
-  const aq = aqResp ? await aqResp.json().catch(() => null) : null;
-
-  // Merge aerosol data into weather hourly
-  if (aq?.hourly?.aerosol_optical_depth && wx.hourly) {
-    wx.hourly.aerosol_optical_depth = aq.hourly.aerosol_optical_depth;
-  }
-
-  return wx;
-}
-
-function processAllCachedData(rawData) {
-  cityScores = {};
-  CITIES.forEach(city => {
-    if (rawData[city.id]) {
-      cityScores[city.id] = buildScoreTimeSeries(city, rawData[city.id]);
-    }
-  });
-  renderMarkers();
-  if (selectedCityId) renderCityPanel(selectedCityId);
-  updateCityList();
-}
-
-// ──────────────────────────────────────────────────────────────────────────────
-// City panel
-// ──────────────────────────────────────────────────────────────────────────────
-function selectCity(cityId) {
-  selectedCityId = cityId;
-  renderCityPanel(cityId);
-  document.getElementById('city-panel').classList.remove('hidden');
-}
-
-function renderCityPanel(cityId) {
-  const city   = CITIES.find(c => c.id === cityId);
-  const series = cityScores[cityId];
-  if (!city || !series) return;
-
-  const now      = new Date();
-  const upcoming = getUpcomingScore(series, now);
-  const score    = upcoming ? upcoming.score : 0;
-  const { label, css } = scoreLabel(score);
-
-  document.getElementById('panel-city-name').textContent = city.name + ' · ' + city.province;
-  document.getElementById('panel-score-value').textContent = score.toFixed(2);
-  document.getElementById('panel-score-label').textContent = label;
-  document.getElementById('panel-score-label').className   = 'score-badge ' + css;
-
-  if (upcoming?.detail) {
-    const d = upcoming.detail;
-    document.getElementById('panel-cloud-low').textContent  = (d.cloudLow  ?? '--') + '%';
-    document.getElementById('panel-cloud-mid').textContent  = (d.cloudMid  ?? '--') + '%';
-    document.getElementById('panel-cloud-high').textContent = (d.cloudHigh ?? '--') + '%';
-    document.getElementById('panel-aod').textContent        = (d.aod != null ? d.aod.toFixed(3) : '--');
-    document.getElementById('panel-aod-label').textContent  = d.aod != null ? aodLabel(d.aod) : '';
-
-    const sunTimes = SunCalc.getTimes(now, city.lat, city.lon);
-    document.getElementById('panel-sunset').textContent  = formatLocalTime(sunTimes.sunset);
-    document.getElementById('panel-sunrise').textContent = formatLocalTime(sunTimes.sunrise);
-  }
-
-  renderChart(city, series);
-}
-
-function formatLocalTime(date) {
-  if (!date || isNaN(date.getTime())) return '--';
-  return date.toLocaleTimeString('zh-CN', {
-    hour:   '2-digit',
-    minute: '2-digit',
-    timeZone: 'Asia/Shanghai',
+  list.querySelectorAll('.city-list-item').forEach((el) => {
+    el.addEventListener('click', () => {
+      const cityId = el.dataset.id;
+      selectCity(cityId);
+      const city = getCityState(cityId);
+      if (city) map.setView([city.lat, city.lon], Math.max(map.getZoom(), 6), { animate: true });
+    });
   });
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Chart
-// ──────────────────────────────────────────────────────────────────────────────
-function renderChart(city, series) {
-  const ctx = document.getElementById('forecast-chart').getContext('2d');
+function renderDailyList(city) {
+  const root = document.getElementById('panel-daily-list');
+  if (!root || !city) return;
+
+  root.innerHTML = city.forecast.daily.slice(0, 3).map((day) => {
+    const best = day.best;
+    const sunset = day.sunset;
+    const sunrise = day.sunrise;
+    const bestLabel = best ? `${best.detail?.eventType === 'sunrise' ? '朝霞' : '晚霞'} ${best.score.toFixed(2)}` : '—';
+    const sunriseScore = sunrise?.score ?? 0;
+    const sunsetScore = sunset?.score ?? 0;
+    return `
+      <div class="daily-card">
+        <div class="daily-head">
+          <strong>${formatDate(day.date)}</strong>
+          <span class="score-badge ${scoreLabel(best?.score ?? 0).css} small">${bestLabel}</span>
+        </div>
+        <div class="daily-grid">
+          <div><span>日出</span><b>${formatTime(sunrise?.detail?.eventTime)}</b><small>${sunriseScore.toFixed(2)}</small></div>
+          <div><span>日落</span><b>${formatTime(sunset?.detail?.eventTime)}</b><small>${sunsetScore.toFixed(2)}</small></div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function renderChart(city) {
+  const canvas = document.getElementById('forecast-chart');
+  if (!canvas || !city) return;
+  const ctx = canvas.getContext('2d');
   if (chartInstance) chartInstance.destroy();
 
-  // Show 48h window starting from 12h ago
-  const now       = new Date();
-  const startTime = new Date(now.getTime() - 12 * 3600 * 1000);
-  const endTime   = new Date(now.getTime() + 36 * 3600 * 1000);
-
-  const filtered = series.filter(e => e.time >= startTime && e.time <= endTime);
-
-  const labels       = filtered.map(e => formatAxisTime(e.time));
-  const ssScores     = filtered.map(e => e.sunsetScore.toFixed(2));
-  const srScores     = filtered.map(e => e.sunriseScore.toFixed(2));
-  const cloudLows    = filtered.map(e => e.cloudLow);
-  const cloudHighs   = filtered.map(e => e.cloudHigh);
+  const now = new Date();
+  const startTime = new Date(now.getTime() - 12 * 60 * 60 * 1000);
+  const endTime = new Date(now.getTime() + 36 * 60 * 60 * 1000);
+  const filtered = city.forecast.series.filter((entry) => {
+    const time = new Date(entry.time);
+    return time >= startTime && time <= endTime;
+  });
 
   chartInstance = new Chart(ctx, {
     type: 'line',
     data: {
-      labels,
+      labels: filtered.map((entry) => formatAxisTime(entry.time)),
       datasets: [
         {
-          label: '晚霞鲜艳度',
-          data:  ssScores,
+          label: '晚霞',
+          data: filtered.map((entry) => entry.sunsetScore.toFixed(2)),
           borderColor: '#ff6b35',
           backgroundColor: 'rgba(255,107,53,0.12)',
           borderWidth: 2,
@@ -311,8 +223,8 @@ function renderChart(city, series) {
           pointRadius: 2,
         },
         {
-          label: '朝霞鲜艳度',
-          data:  srScores,
+          label: '朝霞',
+          data: filtered.map((entry) => entry.sunriseScore.toFixed(2)),
           borderColor: '#f7c59f',
           backgroundColor: 'rgba(247,197,159,0.10)',
           borderWidth: 2,
@@ -323,9 +235,8 @@ function renderChart(city, series) {
         },
         {
           label: '低云量 %',
-          data:  cloudLows,
+          data: filtered.map((entry) => entry.cloudLow),
           borderColor: '#90caf9',
-          backgroundColor: 'rgba(144,202,249,0.0)',
           borderWidth: 1,
           borderDash: [3, 3],
           tension: 0.2,
@@ -334,9 +245,8 @@ function renderChart(city, series) {
         },
         {
           label: '高云量 %',
-          data:  cloudHighs,
+          data: filtered.map((entry) => entry.cloudHigh),
           borderColor: '#ce93d8',
-          backgroundColor: 'rgba(206,147,216,0.0)',
           borderWidth: 1,
           borderDash: [3, 3],
           tension: 0.2,
@@ -350,141 +260,232 @@ function renderChart(city, series) {
       maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
       plugins: {
-        legend: { labels: { color: '#ccc', font: { size: 11 } } },
-        tooltip: {
-          callbacks: {
-            title: items => items[0].label,
-          },
-        },
+        legend: { labels: { color: '#c8d1dc', font: { size: 11 } } },
+        tooltip: { callbacks: { title: (items) => items[0].label } },
       },
       scales: {
         x: {
-          ticks: { color: '#aaa', maxTicksLimit: 12, maxRotation: 0 },
-          grid:  { color: 'rgba(255,255,255,0.05)' },
+          ticks: { color: '#aab4c3', maxTicksLimit: 12, maxRotation: 0 },
+          grid: { color: 'rgba(255,255,255,0.05)' },
         },
         yScore: {
           position: 'left',
           min: 0,
           max: 5,
-          title: { display: true, text: '鲜艳度 (0–5)', color: '#aaa', font: { size: 11 } },
-          ticks: { color: '#aaa' },
-          grid:  { color: 'rgba(255,255,255,0.07)' },
+          title: { display: true, text: '鲜艳度 (0–5)', color: '#aab4c3', font: { size: 11 } },
+          ticks: { color: '#aab4c3' },
+          grid: { color: 'rgba(255,255,255,0.07)' },
         },
         yCloud: {
           position: 'right',
           min: 0,
           max: 100,
-          title: { display: true, text: '云量 %', color: '#aaa', font: { size: 11 } },
-          ticks: { color: '#aaa' },
-          grid:  { drawOnChartArea: false },
+          title: { display: true, text: '云量 %', color: '#aab4c3', font: { size: 11 } },
+          ticks: { color: '#aab4c3' },
+          grid: { drawOnChartArea: false },
         },
       },
     },
   });
 }
 
-function formatAxisTime(date) {
-  return date.toLocaleString('zh-CN', {
-    month:   'numeric',
-    day:     'numeric',
-    hour:    '2-digit',
-    minute:  '2-digit',
-    timeZone: 'Asia/Shanghai',
-  });
+function renderPanel(city) {
+  if (!city) return;
+  const best = city.forecast.best;
+  const { label, css } = scoreLabel(best?.score ?? 0);
+
+  document.getElementById('panel-city-name').textContent = city.name;
+  document.getElementById('panel-city-subtitle').textContent = `${city.province} · ${city.region} · ${best?.detail?.eventType === 'sunrise' ? '朝霞优先' : '晚霞优先'}`;
+  document.getElementById('panel-score-value').textContent = `${(best?.score ?? 0).toFixed(2)}`;
+  const scoreLabelEl = document.getElementById('panel-score-label');
+  scoreLabelEl.textContent = label;
+  scoreLabelEl.className = `score-badge ${css}`;
+
+  const eventTime = best?.detail?.eventTime;
+  document.getElementById('panel-sunset').textContent = formatTime(city.forecast.daily[0]?.sunset?.detail?.eventTime);
+  document.getElementById('panel-sunrise').textContent = formatTime(city.forecast.daily[0]?.sunrise?.detail?.eventTime);
+
+  const dominant = best?.detail?.dominantLayer;
+  const dominantText = dominant?.layer === 'low' ? '低云为主' : dominant?.layer === 'mid' ? '中云为主' : dominant?.layer === 'high' ? '高云为主' : '混合云';
+  document.getElementById('panel-dominant-layer').textContent = `${dominantText} / ${dominant?.heightKm?.toFixed(1) ?? '—'} km`;
+  document.getElementById('panel-aod').textContent = best?.detail?.aod != null ? best.detail.aod.toFixed(3) : '—';
+  document.getElementById('panel-aod-label').textContent = aodLabel(best?.detail?.aod ?? 0);
+  document.getElementById('panel-cloud-low').textContent = `${Math.round(best?.detail?.cloudLow ?? 0)}%`;
+  document.getElementById('panel-cloud-mid').textContent = `${Math.round(best?.detail?.cloudMid ?? 0)}%`;
+  document.getElementById('panel-cloud-high').textContent = `${Math.round(best?.detail?.cloudHigh ?? 0)}%`;
+
+  renderChart(city);
+  renderDailyList(city);
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// City list sidebar
-// ──────────────────────────────────────────────────────────────────────────────
-function updateCityList() {
-  const list = document.getElementById('city-list');
-  if (!list) return;
-
-  const now = new Date();
-
-  const ranked = CITIES.map(city => {
-    const series   = cityScores[city.id];
-    const upcoming = series ? getUpcomingScore(series, now) : null;
-    return { city, score: upcoming ? upcoming.score : 0 };
-  }).sort((a, b) => b.score - a.score);
-
-  list.innerHTML = ranked.map(({ city, score }) => {
-    const { label, css } = scoreLabel(score);
-    return `
-      <div class="city-list-item" data-id="${city.id}">
-        <span class="city-list-name">${city.name}</span>
-        <span class="score-badge ${css} small">${label} ${score.toFixed(1)}</span>
-      </div>`;
-  }).join('');
-
-  list.querySelectorAll('.city-list-item').forEach(el => {
-    el.addEventListener('click', () => {
-      const cityId = el.dataset.id;
-      selectCity(cityId);
-      const city = CITIES.find(c => c.id === cityId);
-      if (city) map.setView([city.lat, city.lon], 7, { animate: true });
-    });
-  });
+function selectCity(cityId) {
+  selectedCityId = cityId;
+  const city = getCityState(cityId);
+  if (!city) return;
+  renderPanel(city);
+  document.getElementById('city-panel')?.classList.remove('hidden');
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// UI helpers
-// ──────────────────────────────────────────────────────────────────────────────
-function showLoading(show) {
-  const el = document.getElementById('loading-overlay');
-  if (el) el.style.display = show ? 'flex' : 'none';
-}
+function renderAll(payload) {
+  hydrateCityStates(payload);
+  renderHero();
+  renderMarkers();
+  renderCityList();
+  updateDataInfo(payload);
 
-function updateProgress(done, total) {
-  const el = document.getElementById('loading-text');
-  if (el) el.textContent = `正在获取数据 ${done}/${total} 个城市…`;
-}
+  const ranked = [...cityStates].sort((a, b) => (b.forecast.best?.score ?? 0) - (a.forecast.best?.score ?? 0));
+  const firstSunset = ranked.find((city) => city.forecast.best?.detail?.eventType === 'sunset') ?? ranked[0];
+  const firstSunrise = ranked.find((city) => city.forecast.best?.detail?.eventType === 'sunrise') ?? ranked[0];
 
-function updateDataInfo(ts) {
-  const el = document.getElementById('data-info');
-  if (el) {
-    el.textContent = `GFS 数据时次：${ts.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })} · 每6小时自动刷新`;
+  if (firstSunset) {
+    document.getElementById('hero-sunset-city').textContent = firstSunset.name;
+    document.getElementById('hero-sunset-meta').textContent = `${bestEventLabel(firstSunset.forecast.best)} · ${firstSunset.province}`;
+  }
+  if (firstSunrise) {
+    document.getElementById('hero-sunrise-city').textContent = firstSunrise.name;
+    document.getElementById('hero-sunrise-meta').textContent = `${bestEventLabel(firstSunrise.forecast.best)} · ${firstSunrise.province}`;
+  }
+
+  if (selectedCityId) {
+    const city = getCityState(selectedCityId);
+    if (city) renderPanel(city);
+  } else if (ranked[0]) {
+    renderPanel(ranked[0]);
+    selectedCityId = ranked[0].id;
+    document.getElementById('city-panel')?.classList.remove('hidden');
   }
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Auto-refresh
-// ──────────────────────────────────────────────────────────────────────────────
-function scheduleRefresh() {
-  if (refreshTimer) clearTimeout(refreshTimer);
-  refreshTimer = setTimeout(async () => {
-    localStorage.removeItem(CACHE_KEY);
-    await loadAllCities();
-    scheduleRefresh();
-  }, CACHE_TTL_MS);
+function loadCache() {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed?.ts || Date.now() - parsed.ts > CACHE_TTL_MS) return null;
+    return parsed.data;
+  } catch {
+    return null;
+  }
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Event listeners
-// ──────────────────────────────────────────────────────────────────────────────
+function saveCache(data) {
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), data }));
+  } catch {
+    // ignore
+  }
+}
+
+async function loadStaticPayload() {
+  const cached = loadCache();
+  if (cached) return cached;
+
+  const response = await fetch(`${STATIC_DATA_URL}?v=${Date.now()}`, { cache: 'no-store' });
+  if (!response.ok) throw new Error(`static payload ${response.status}`);
+  const payload = await response.json();
+  saveCache(payload);
+  return payload;
+}
+
+async function fetchCityForecast(city) {
+  const weatherParams = new URLSearchParams({
+    latitude: city.lat,
+    longitude: city.lon,
+    hourly: WEATHER_VARS,
+    timezone: 'Asia/Shanghai',
+    forecast_days: 3,
+  });
+
+  const aqParams = new URLSearchParams({
+    latitude: city.lat,
+    longitude: city.lon,
+    hourly: AIR_QUALITY_VARS,
+    timezone: 'Asia/Shanghai',
+    forecast_days: 3,
+  });
+
+  const [weatherResponse, aqResponse] = await Promise.all([
+    fetch(`${OPEN_METEO_URL}?${weatherParams}`),
+    fetch(`${AIR_QUALITY_URL}?${aqParams}`).catch(() => null),
+  ]);
+
+  if (!weatherResponse.ok) throw new Error(`weather ${weatherResponse.status}`);
+  const weather = await weatherResponse.json();
+  const aq = aqResponse ? await aqResponse.json().catch(() => null) : null;
+
+  if (aq?.hourly?.aerosol_optical_depth && weather?.hourly) {
+    weather.hourly.aerosol_optical_depth = aq.hourly.aerosol_optical_depth;
+  }
+
+  const forecast = buildCityForecast(city, weather);
+  return {
+    ...city,
+    forecast,
+    rawWeather: weather,
+    source: 'live',
+  };
+}
+
+async function fetchLivePayload() {
+  const tasks = CITIES.map((city) => fetchCityForecast(city).catch((error) => ({
+    ...city,
+    forecast: { series: [], daily: [], best: null },
+    error: String(error),
+    source: 'error',
+  })));
+  const cities = await Promise.all(tasks);
+  return {
+    generatedAt: new Date().toISOString(),
+    source: 'live-open-meteo',
+    cities,
+  };
+}
+
+async function loadPayload() {
+  try {
+    return await loadStaticPayload();
+  } catch (error) {
+    console.warn('[SunsetWhisper] static payload unavailable, falling back to live API', error);
+    return fetchLivePayload();
+  }
+}
+
 function bindEvents() {
   document.getElementById('btn-close-panel')?.addEventListener('click', () => {
-    document.getElementById('city-panel').classList.add('hidden');
+    document.getElementById('city-panel')?.classList.add('hidden');
     selectedCityId = null;
   });
 
   document.getElementById('btn-refresh')?.addEventListener('click', async () => {
     localStorage.removeItem(CACHE_KEY);
-    await loadAllCities();
+    setLoading(true, '正在重新拉取数据…');
+    const payload = await loadPayload();
+    renderAll(payload);
+    setLoading(false);
   });
 
   document.getElementById('btn-toggle-list')?.addEventListener('click', () => {
-    document.getElementById('city-sidebar').classList.toggle('open');
+    document.getElementById('city-sidebar')?.classList.toggle('open');
   });
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Entry point
-// ──────────────────────────────────────────────────────────────────────────────
+function scheduleRefresh() {
+  if (refreshTimer) clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(async () => {
+    localStorage.removeItem(CACHE_KEY);
+    const payload = await loadPayload();
+    renderAll(payload);
+    scheduleRefresh();
+  }, CACHE_TTL_MS);
+}
+
 async function main() {
   initMap();
   bindEvents();
-  await loadAllCities();
+  setLoading(true, '正在获取 GFS 分层数据…');
+  const payload = await loadPayload();
+  renderAll(payload);
+  setLoading(false);
   scheduleRefresh();
 }
 

@@ -1,0 +1,11 @@
+{
+  "name": "sunsetwhisper",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build-forecast.mjs"
+  },
+  "dependencies": {
+    "suncalc": "^1.9.0"
+  }
+}
