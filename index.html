@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SunsetWhisper · 朝霞晚霞预报</title>
+  <meta name="description" content="基于 GFS 气象数据与火烧云几何模型的中国主要城市朝霞晚霞定量预报" />
+
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin="" />
+
+  <!-- Google Fonts (Noto Sans SC) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;600;700&display=swap" rel="stylesheet" />
+
+  <!-- Custom CSS -->
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+<div id="app">
+
+  <!-- ── Header ─────────────────────────────────────────────── -->
+  <header id="header">
+    <h1>🌅 SunsetWhisper <span class="sub">朝霞晚霞预报</span></h1>
+    <span id="data-info">正在加载数据…</span>
+    <button class="header-btn" id="btn-refresh" title="立即刷新数据">↺ 刷新</button>
+  </header>
+
+  <!-- ── Main ───────────────────────────────────────────────── -->
+  <div id="main">
+
+    <!-- Map -->
+    <div id="map"></div>
+
+    <!-- Toggle sidebar button (floating over map) -->
+    <button id="btn-toggle-list" title="城市排行榜">☰</button>
+
+    <!-- City ranking sidebar -->
+    <aside id="city-sidebar">
+      <div id="city-sidebar-header">城市排行 · 今日鲜艳度</div>
+      <div id="city-list"></div>
+    </aside>
+
+    <!-- City detail panel -->
+    <aside id="city-panel" class="hidden">
+      <div id="panel-header">
+        <span id="panel-city-name">城市</span>
+        <button class="panel-close-btn" id="btn-close-panel" title="关闭">✕</button>
+      </div>
+
+      <!-- Score row -->
+      <div id="panel-score-row">
+        <div>
+          <div style="font-size:11px;color:var(--muted);margin-bottom:4px">当前鲜艳度</div>
+          <span id="panel-score-value">–</span>
+        </div>
+        <div>
+          <div style="font-size:11px;color:var(--muted);margin-bottom:4px">等级</div>
+          <span id="panel-score-label" class="score-badge score-none">–</span>
+        </div>
+      </div>
+
+      <!-- Meta grid -->
+      <div id="panel-meta">
+        <div class="meta-item">
+          <div class="meta-label">今日日落</div>
+          <div class="meta-value" id="panel-sunset">–</div>
+        </div>
+        <div class="meta-item">
+          <div class="meta-label">今日日出</div>
+          <div class="meta-value" id="panel-sunrise">–</div>
+        </div>
+        <div class="meta-item">
+          <div class="meta-label">低云量</div>
+          <div class="meta-value" id="panel-cloud-low">–</div>
+        </div>
+        <div class="meta-item">
+          <div class="meta-label">中云量</div>
+          <div class="meta-value" id="panel-cloud-mid">–</div>
+        </div>
+        <div class="meta-item">
+          <div class="meta-label">高云量</div>
+          <div class="meta-value" id="panel-cloud-high">–</div>
+        </div>
+        <div class="meta-item">
+          <div class="meta-label">气溶胶 AOD</div>
+          <div class="meta-value" id="panel-aod">–
+            <span id="panel-aod-label" style="font-size:11px;color:var(--muted);display:block;font-weight:400"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Forecast chart -->
+      <div id="panel-chart-container">
+        <div id="panel-chart-title">48 小时预报（朝霞 / 晚霞 鲜艳度 + 云量）</div>
+        <canvas id="forecast-chart"></canvas>
+      </div>
+
+      <!-- About / algorithm note -->
+      <div id="about-section">
+        <strong>算法说明</strong><br>
+        基于
+        <a href="https://www.sunsetbot.top/halo/posts/2026/huo-shao-yun-yu-bao-jiao-cheng-zhang-jie-yi/"
+           target="_blank" rel="noopener">火烧云定量预报教程 §1.2</a>
+        几何模型：<br>
+        最大照射距离 <em>d<sub>max</sub> = √(2Rh)</em>，
+        持续时长 <em>T = d<sub>max</sub> / v<sub>s</sub></em>。<br>
+        气象数据来自 <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo GFS</a>
+        （低/中/高云量 + 气溶胶光学厚度），每 6 小时更新一次。<br><br>
+        鲜艳度等级：
+        <span class="score-badge score-none small">不烧</span>
+        <span class="score-badge score-micro small">微烧</span>
+        <span class="score-badge score-small small">小烧</span>
+        <span class="score-badge score-medium small">中烧</span>
+        <span class="score-badge score-large small">大烧</span>
+        <span class="score-badge score-super small">超烧</span>
+      </div>
+    </aside>
+
+    <!-- Score legend -->
+    <div id="legend">
+      <h4>鲜艳度图例</h4>
+      <div class="legend-row"><div class="legend-dot" style="background:var(--score-none)"></div>不烧 (&lt;0.3)</div>
+      <div class="legend-row"><div class="legend-dot" style="background:var(--score-micro)"></div>微烧 (0.3–1)</div>
+      <div class="legend-row"><div class="legend-dot" style="background:var(--score-small)"></div>小烧 (1–2)</div>
+      <div class="legend-row"><div class="legend-dot" style="background:var(--score-medium)"></div>中烧 (2–3)</div>
+      <div class="legend-row"><div class="legend-dot" style="background:var(--score-large)"></div>大烧 (3–4)</div>
+      <div class="legend-row"><div class="legend-dot" style="background:var(--score-super)"></div>超烧 (≥4)</div>
+    </div>
+
+  </div><!-- /#main -->
+</div><!-- /#app -->
+
+<!-- Loading overlay -->
+<div id="loading-overlay">
+  <div class="spinner"></div>
+  <div id="loading-text">正在获取 GFS 数据…</div>
+</div>
+
+<!-- ── Scripts (CDN) ──────────────────────────────────────────── -->
+
+<!-- Leaflet JS -->
+<script
+  src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+  integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV/XN2GGnc="
+  crossorigin=""></script>
+
+<!-- SunCalc – solar position & times -->
+<script src="https://cdn.jsdelivr.net/npm/suncalc@1.9.0/suncalc.js"></script>
+
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+
+<!-- App scripts -->
+<script src="js/cities.js"></script>
+<script src="js/forecast.js"></script>
+<script src="js/app.js"></script>
+
+</body>
+</html>
