@@ -204,10 +204,12 @@ function makeLayerState(samplePoint, index) {
   return layers;
 }
 
-function parabolaHeightKm(distanceKm, cloudBaseKm, sunAltitudeDeg) {
-  const slope = Math.tan(clamp(Math.abs(sunAltitudeDeg), 0.4, 5.0) * Math.PI / 180);
-  const curvature = (distanceKm * distanceKm) / (2 * EARTH_RADIUS_KM);
-  return cloudBaseKm + distanceKm * slope + curvature;
+function parabolaVertexKm(cloudBaseKm) {
+  return Math.sqrt(2 * EARTH_RADIUS_KM * Math.max(cloudBaseKm, 0.05));
+}
+
+function parabolaHeightKm(distanceKm, cloudBaseKm, vertexKm) {
+  return cloudBaseKm + (distanceKm * (distanceKm - 2 * vertexKm)) / (2 * EARTH_RADIUS_KM);
 }
 
 function samplePointScore(samplePoint, index, distanceKm, curveHeightKm) {
@@ -258,14 +260,16 @@ function evaluateEventAtHour({ city, baseWeather, sampleData, index, eventType, 
   const localLayers = makeLayerState(sampleData.local, index);
   const cloudBase = estimateCloudBase(localLayers);
   const cloudBaseKm = cloudBase.cloudBaseKm;
+  const vertexKm = parabolaVertexKm(cloudBaseKm);
 
   const pathProfile = sampleData[eventType].map((pt, pIdx) => {
     const distanceKm = SAMPLE_DISTANCES_KM[pIdx];
-    const curveHeightKm = parabolaHeightKm(distanceKm, cloudBaseKm, sunAltitudeDeg);
+    const curveHeightKm = parabolaHeightKm(distanceKm, cloudBaseKm, vertexKm);
     const sample = samplePointScore(pt, index, distanceKm, curveHeightKm);
     return {
       distanceKm,
       curveHeightKm,
+      vertexKm,
       ...sample,
     };
   });
@@ -304,6 +308,7 @@ function evaluateEventAtHour({ city, baseWeather, sampleData, index, eventType, 
     },
     cloudBaseSource: cloudBase.source,
     sunAltitudeDeg,
+    vertexKm,
     blockedCount,
     blockedRatio,
     pathProfile,

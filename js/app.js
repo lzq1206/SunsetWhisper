@@ -117,7 +117,7 @@ function renderPathDiagram(city) {
   const eventName = detail.eventType === 'sunrise' ? '朝霞' : '晚霞';
   const bearing = city.strictMeta?.[detail.eventType === 'sunrise' ? 'sunriseBearing' : 'sunsetBearing'];
   const blockedText = detail.blockedCount ? `遮挡点 ${detail.blockedCount}/${profile.length}` : '未触发 RH80 遮挡';
-  meta.textContent = `${eventName}抛物线 · 方位角 ${bearing?.toFixed(1) ?? '—'}° · 云底 ${detail.dominantLayer?.heightKm?.toFixed(1) ?? '—'} km · ${blockedText}`;
+  meta.textContent = `${eventName}抛物线 · 方位角 ${bearing?.toFixed(1) ?? '—'}° · 云底 ${detail.dominantLayer?.heightKm?.toFixed(1) ?? '—'} km · 顶点 ${detail.vertexKm?.toFixed(1) ?? '—'} km · ${blockedText}`;
 
   const width = 780;
   const height = 280;
