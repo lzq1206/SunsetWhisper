@@ -330,35 +330,39 @@ function buildStrictForecast(city, baseWeather, sampleData) {
   for (let i = 0; i < hourly.time.length; i += 1) {
     const time = parseForecastTime(hourly.time[i]);
     const sunTimes = SunCalc.getTimes(time, city.lat, city.lon);
+    const eventCandidates = [
+      { eventType: 'sunrise', eventTime: sunTimes.sunrise },
+      { eventType: 'sunset', eventTime: sunTimes.sunset },
+    ]
+      .map((item) => ({
+        ...item,
+        localScore: timeFactor(item.eventType, (time.getTime() - item.eventTime.getTime()) / 60000),
+      }))
+      .filter((item) => item.localScore > 0)
+      .sort((a, b) => b.localScore - a.localScore);
 
-    const sunsetDetail = evaluateEventAtHour({
-      city,
-      baseWeather,
-      sampleData,
-      index: i,
-      eventType: 'sunset',
-      eventTime: sunTimes.sunset,
-    });
+    const chosen = eventCandidates[0] ?? null;
+    const eventDetail = chosen
+      ? evaluateEventAtHour({
+          city,
+          baseWeather,
+          sampleData,
+          index: i,
+          eventType: chosen.eventType,
+          eventTime: chosen.eventTime,
+        })
+      : null;
 
-    const sunriseDetail = evaluateEventAtHour({
-      city,
-      baseWeather,
-      sampleData,
-      index: i,
-      eventType: 'sunrise',
-      eventTime: sunTimes.sunrise,
-    });
-
-    const sunsetScore = sunsetDetail?.score ?? 0;
-    const sunriseScore = sunriseDetail?.score ?? 0;
-    const score = Math.max(sunsetScore, sunriseScore);
+    const sunsetScore = eventDetail?.eventType === 'sunset' ? eventDetail.score : 0;
+    const sunriseScore = eventDetail?.eventType === 'sunrise' ? eventDetail.score : 0;
+    const score = eventDetail?.score ?? 0;
 
     series.push({
       time: time.toISOString(),
       score,
       sunsetScore,
       sunriseScore,
-      detail: sunsetScore >= sunriseScore ? sunsetDetail : sunriseDetail,
+      detail: eventDetail,
       cloudLow: hourly.cloud_cover_low?.[i] ?? 0,
       cloudMid: hourly.cloud_cover_mid?.[i] ?? 0,
       cloudHigh: hourly.cloud_cover_high?.[i] ?? 0,

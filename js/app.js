@@ -12,7 +12,7 @@ import {
 'use strict';
 
 const STATIC_DATA_URL = './data/latest.json';
-const CACHE_KEY = 'sunsetwhisper.static-cache.v3';
+const CACHE_KEY = 'sunsetwhisper.static-cache.v4';
 const CACHE_TTL_MS = 3 * 60 * 60 * 1000;
 const OPEN_METEO_URL = 'https://api.open-meteo.com/v1/gfs';
 const AIR_QUALITY_URL = 'https://air-quality-api.open-meteo.com/v1/air-quality';
