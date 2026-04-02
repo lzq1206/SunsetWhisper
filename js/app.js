@@ -140,11 +140,10 @@ function renderPathDiagram(city) {
   const padB = 32;
   const plotW = width - padL - padR;
   const plotH = height - padT - padB;
-  const bandLevels = [1000, 925, 850, 700, 600, 500, 400];
-  const bandH = plotH / bandLevels.length;
+  const altitudeTicks = [12000, 10000, 8000, 6000, 4000, 2000, 0];
   const maxDist = Math.max(...profile.map((p) => p.distanceKm));
   const xFor = (d) => padL + (d / maxDist) * plotW;
-  const yFor = (km) => padT + plotH - Math.min(Math.max(km, 0), 10) / 10 * plotH;
+  const yFor = (km) => padT + plotH - Math.min(Math.max(km, 0), 12) / 12 * plotH;
   const originY = padT + plotH + 2;
   const originX = padL - 6;
 
@@ -155,10 +154,13 @@ function renderPathDiagram(city) {
   profile.forEach((point) => {
     const x = xFor(point.distanceKm);
     const cellW = profile.length === 1 ? plotW : plotW / (profile.length - 1) * 0.72;
-    point.layers.forEach((layer, layerIdx) => {
-      const y = padT + layerIdx * bandH;
+    [...point.layers].sort((a, b) => a.heightKm - b.heightKm).forEach((layer, layerIdx, sortedLayers) => {
+      const topKm = layer.heightKm;
+      const bottomKm = sortedLayers[layerIdx + 1]?.heightKm ?? 12;
+      const y = yFor(bottomKm);
+      const h = Math.max(3, yFor(topKm) - yFor(bottomKm));
       rects.push(`
-        <rect x="${(x - cellW / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${cellW.toFixed(1)}" height="${bandH.toFixed(1)}" fill="${pressureLevelColor(layer.level, layer.rh)}"></rect>
+        <rect x="${(x - cellW / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${cellW.toFixed(1)}" height="${h.toFixed(1)}" fill="${pressureLevelColor(layer.level, layer.rh)}"></rect>
       `);
     });
     const rayY = yFor(point.curveHeightKm ?? 0.35);
@@ -169,9 +171,10 @@ function renderPathDiagram(city) {
   const curveLine = `<polyline class="path-ray" points="${curvePoints.join(' ')}"></polyline>`;
   const origin = `<circle class="path-origin" cx="${originX}" cy="${originY}" r="5"></circle><text x="${originX + 10}" y="${originY + 4}" class="path-axis-label">城市云底</text>`;
   const xLabels = profile.map((point) => `<text x="${xFor(point.distanceKm).toFixed(1)}" y="${height - 10}" text-anchor="middle" class="path-axis-label">${point.distanceKm} km</text>`).join('');
-  const bandLabels = bandLevels.map((level, idx) => {
-    const y = padT + idx * bandH + bandH / 2 + 3;
-    return `<text x="12" y="${y.toFixed(1)}" class="path-band-label">${level}hPa</text>`;
+  const bandLabels = altitudeTicks.map((level) => {
+    const y = yFor(level / 1000);
+    const label = level === 12000 ? '12000m+' : `${level}m`;
+    return `<text x="12" y="${(y + 3).toFixed(1)}" class="path-band-label">${label}</text>`;
   }).join('');
 
   const topSummary = profile.slice(0, 4).map((point) => {
