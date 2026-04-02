@@ -473,6 +473,7 @@ function renderPanel(city) {
   document.getElementById('panel-cloud-low').textContent = `${Math.round(best?.detail?.cloudLow ?? 0)}%`;
   document.getElementById('panel-cloud-mid').textContent = `${Math.round(best?.detail?.cloudMid ?? 0)}%`;
   document.getElementById('panel-cloud-high').textContent = `${Math.round(best?.detail?.cloudHigh ?? 0)}%`;
+  document.getElementById('panel-cloud-total').textContent = `${Math.round(best?.detail?.cloudCoverTotal ?? 0)}% / ${(best?.detail?.cloudWeight ?? 0).toFixed(2)}`;
 
   renderPathDiagram(city);
   renderChart(city);

@@ -121,6 +121,13 @@ function aodClarity(aod) {
   return Math.exp(-1.6 * penalty);
 }
 
+function cloudCoverWeight(cloudCover) {
+  const value = Math.max(0, cloudCover ?? 0);
+  if (value <= 0) return 0;
+  if (value >= 30) return 1;
+  return value / 30;
+}
+
 function illuminationDistance(heightKm) {
   return Math.sqrt(2 * EARTH_RADIUS_KM * Math.max(heightKm, 0.2));
 }
@@ -300,7 +307,13 @@ function evaluateEventAtHour({ city, baseWeather, sampleData, index, eventType, 
   const pathScore = bestClearPoints.reduce((sum, point) => sum + point.score, 0) / Math.max(bestClearPoints.length, 1);
   const aod = hourly.aerosol_optical_depth?.[index] ?? 0.2;
   const clarity = aodClarity(aod);
-  const finalScore = clamp((0.65 * meanClear + 0.35 * pathScore) * (1 - blockedRatio * 0.95) * tf * clarity * 5.0, 0, 5);
+  const cloudCoverTotal = hourly.cloud_cover?.[index] ?? Math.max(
+    hourly.cloud_cover_low?.[index] ?? 0,
+    hourly.cloud_cover_mid?.[index] ?? 0,
+    hourly.cloud_cover_high?.[index] ?? 0,
+  );
+  const cloudWeight = cloudCoverWeight(cloudCoverTotal);
+  const finalScore = clamp((0.65 * meanClear + 0.35 * pathScore) * (1 - blockedRatio * 0.95) * tf * clarity * cloudWeight * 5.0, 0, 5);
 
   const dominantLayer = localLayers
     .filter((layer) => layer.rh >= THRESHOLDS.cloudBlock.rh)
@@ -314,8 +327,10 @@ function evaluateEventAtHour({ city, baseWeather, sampleData, index, eventType, 
     cloudLow: hourly.cloud_cover_low?.[index] ?? 0,
     cloudMid: hourly.cloud_cover_mid?.[index] ?? 0,
     cloudHigh: hourly.cloud_cover_high?.[index] ?? 0,
+    cloudCoverTotal,
     aod,
     aodMult: clarity,
+    cloudWeight,
     lowBlock: blockedRatio * 100,
     rawScore: pathScore,
     coverage: 1 - blockedRatio,
