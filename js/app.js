@@ -119,9 +119,9 @@ function renderPathDiagram(city) {
 
   const best = city.forecast.best;
   const detail = best?.detail;
-  const profile = detail?.pathProfile ?? [];
+  const profiles = detail?.windowProfiles?.length ? detail.windowProfiles : (detail?.pathProfile?.length ? [{ offsetMinutes: 0, eventTime: detail.eventTime, pathProfile: detail.pathProfile, cloudBaseKm: detail.dominantLayer?.heightKm ?? null, vertexKm: detail.vertexKm ?? null, blockedCount: detail.blockedCount ?? 0, blockedRatio: detail.blockedRatio ?? 0, score: detail.score ?? 0, sunAltitudeDeg: detail.sunAltitudeDeg ?? 0, sunAzimuthDeg: detail.sunAzimuthDeg ?? 0, localLayers: detail.localLayers ?? [], cloudBaseSource: detail.cloudBaseSource ?? 'unknown' }] : []);
 
-  if (!detail || !profile.length) {
+  if (!detail || !profiles.length) {
     meta.textContent = '暂无可用的光路剖面数据。';
     root.innerHTML = '<div class="path-empty">暂无光路数据</div>';
     return;
@@ -129,55 +129,79 @@ function renderPathDiagram(city) {
 
   const eventName = detail.eventType === 'sunrise' ? '朝霞' : '晚霞';
   const bearing = city.strictMeta?.[detail.eventType === 'sunrise' ? 'sunriseBearing' : 'sunsetBearing'];
-  const blockedText = detail.blockedCount ? `遮挡点 ${detail.blockedCount}/${profile.length}` : '未触发 RH80 遮挡';
-  meta.textContent = `${eventName}抛物线 · 方位角 ${bearing?.toFixed(1) ?? '—'}° · 云底 ${detail.dominantLayer?.heightKm?.toFixed(1) ?? '—'} km · 顶点 ${detail.vertexKm?.toFixed(1) ?? '—'} km · ${blockedText}`;
+  const centerProfile = profiles.find((item) => item.offsetMinutes === 0) ?? profiles[Math.floor(profiles.length / 2)];
+  const blockedText = centerProfile?.blockedCount ? `遮挡点 ${centerProfile.blockedCount}/${centerProfile.pathProfile.length}` : '未触发 RH80 遮挡';
+  meta.textContent = `${eventName}抛物线 · 方位角 ${bearing?.toFixed(1) ?? '—'}° · 云底 ${centerProfile?.cloudBaseKm?.toFixed(1) ?? '—'} km · 顶点 ${centerProfile?.vertexKm?.toFixed(1) ?? '—'} km · ${blockedText}`;
 
-  const width = 780;
-  const height = 280;
-  const padL = 58;
+  const width = 860;
+  const height = 430;
+  const padL = 18;
   const padR = 18;
-  const padT = 16;
-  const padB = 32;
+  const padT = 20;
+  const padB = 42;
   const plotW = width - padL - padR;
   const plotH = height - padT - padB;
   const altitudeTicks = [12000, 10000, 8000, 6000, 4000, 2000, 0];
-  const maxDist = Math.max(...profile.map((p) => p.distanceKm));
-  const xFor = (d) => padL + (d / maxDist) * plotW;
+  const localLeft = padL + 8;
+  const localRight = padL + 70;
+  const curveLeft = padL + 110;
+  const maxDist = Math.max(...profiles.flatMap((p) => p.pathProfile.map((x) => x.distanceKm)));
+  const xFor = (d) => curveLeft + (d / Math.max(maxDist, 1e-6)) * (plotW - (curveLeft - padL) - 8);
   const yFor = (km) => padT + plotH - Math.min(Math.max(km, 0), 12) / 12 * plotH;
-  const originY = padT + plotH + 2;
-  const originX = padL - 6;
+  const originY = yFor(centerProfile?.cloudBaseKm ?? 0.1);
+  const originX = curveLeft - 4;
 
   const rects = [];
   const curvePoints = [];
   const curveMarkers = [];
+  const variantLabels = [];
 
-  profile.forEach((point) => {
-    const x = xFor(point.distanceKm);
-    const cellW = profile.length === 1 ? plotW : plotW / (profile.length - 1) * 0.72;
-    [...point.layers].sort((a, b) => a.heightKm - b.heightKm).forEach((layer, layerIdx, sortedLayers) => {
+  const localLayers = [...(centerProfile?.localLayers ?? detail.localLayers ?? [])].sort((a, b) => a.heightKm - b.heightKm);
+  if (localLayers.length) {
+    localLayers.forEach((layer, layerIdx) => {
       const topKm = layer.heightKm;
-      const bottomKm = sortedLayers[layerIdx + 1]?.heightKm ?? 12;
+      const bottomKm = localLayers[layerIdx + 1]?.heightKm ?? 12;
       const y = yFor(bottomKm);
       const h = Math.max(3, yFor(topKm) - yFor(bottomKm));
       rects.push(`
-        <rect x="${(x - cellW / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${cellW.toFixed(1)}" height="${h.toFixed(1)}" fill="${pressureLevelColor(layer.level, layer.rh)}"></rect>
+        <rect x="${localLeft}" y="${y.toFixed(1)}" width="${localRight - localLeft}" height="${h.toFixed(1)}" fill="${pressureLevelColor(layer.level, layer.rh)}"></rect>
       `);
     });
-    const rayY = yFor(point.curveHeightKm ?? 0.35);
-    curvePoints.push(`${x.toFixed(1)},${rayY.toFixed(1)}`);
-    curveMarkers.push(`<circle cx="${x.toFixed(1)}" cy="${rayY.toFixed(1)}" r="${point.blocked ? 4.6 : 2.8}" fill="${point.blocked ? '#ff4d4f' : '#7bd989'}" stroke="#fff" stroke-width="0.8"></circle>`);
+  }
+
+  profiles.forEach((variant, variantIndex) => {
+    const profile = variant.pathProfile ?? [];
+    const isCenter = variant.offsetMinutes === 0;
+    const stroke = isCenter ? '#ff7a45' : (variant.offsetMinutes < 0 ? 'rgba(255, 208, 138, 0.55)' : 'rgba(255, 208, 138, 0.35)');
+    const dash = isCenter ? '' : '6 5';
+    const widthStroke = isCenter ? 2.8 : 1.6;
+    profile.forEach((point) => {
+      const x = xFor(point.distanceKm);
+      const rayY = yFor(point.curveHeightKm ?? 0.35);
+      if (variantIndex === 0) variantLabels.push('');
+      curvePoints.push(`${x.toFixed(1)},${rayY.toFixed(1)}`);
+      curveMarkers.push(`<circle cx="${x.toFixed(1)}" cy="${rayY.toFixed(1)}" r="${point.blocked ? 4.4 : 2.2}" fill="${point.blocked ? '#ff4d4f' : '#7bd989'}" stroke="#fff" stroke-width="0.7"></circle>`);
+    });
+    rects.push(`
+      <text x="${curveLeft + 6}" y="${(14 + variantIndex * 14).toFixed(1)}" class="path-axis-label">${variant.offsetMinutes >= 0 ? '+' : ''}${variant.offsetMinutes}m</text>
+    `);
+    rects.push(`
+      <polyline points="${profile.map((point) => `${xFor(point.distanceKm).toFixed(1)},${yFor(point.curveHeightKm ?? 0.35).toFixed(1)}`).join(' ')}" fill="none" stroke="${stroke}" stroke-width="${widthStroke}" stroke-dasharray="${dash}"></polyline>
+    `);
   });
 
-  const curveLine = `<polyline class="path-ray" points="${curvePoints.join(' ')}"></polyline>`;
-  const origin = `<circle class="path-origin" cx="${originX}" cy="${originY}" r="5"></circle><text x="${originX + 10}" y="${originY + 4}" class="path-axis-label">城市云底</text>`;
-  const xLabels = profile.map((point) => `<text x="${xFor(point.distanceKm).toFixed(1)}" y="${height - 10}" text-anchor="middle" class="path-axis-label">${point.distanceKm} km</text>`).join('');
+  const origin = `<circle class="path-origin" cx="${originX}" cy="${originY}" r="5"></circle><text x="${originX - 2}" y="${originY - 8}" class="path-axis-label">城市云底</text>`;
+  const xLabels = Array.from({ length: 7 }, (_, i) => {
+    const d = (maxDist * i) / 6;
+    return `<text x="${xFor(d).toFixed(1)}" y="${height - 10}" text-anchor="middle" class="path-axis-label">${Math.round(d)} km</text>`;
+  }).join('');
   const bandLabels = altitudeTicks.map((level) => {
     const y = yFor(level / 1000);
     const label = level === 12000 ? '12000m+' : `${level}m`;
     return `<text x="12" y="${(y + 3).toFixed(1)}" class="path-band-label">${label}</text>`;
   }).join('');
 
-  const topSummary = profile.slice(0, 4).map((point) => {
+  const topSummary = centerProfile.pathProfile.slice(0, 4).map((point) => {
     const d = point.distanceKm.toFixed(0);
     const h = point.curveHeightKm?.toFixed(2) ?? '—';
     const rh = point.curveHumidity?.toFixed(0) ?? '—';
@@ -185,17 +209,20 @@ function renderPathDiagram(city) {
     return `${d}km ${h}km RH${rh} ${flag}`;
   }).join(' · ');
 
+  const localSummary = localLayers.slice(0, 4).map((layer) => `${Math.round(layer.heightKm * 1000)}m RH${Math.round(layer.rh)}`).join(' · ');
+
   root.innerHTML = `
     <svg viewBox="0 0 ${width} ${height}" class="path-svg" role="img" aria-label="抛物线光路分层剖面">
       <rect x="${padL}" y="${padT}" width="${plotW}" height="${plotH}" rx="10" fill="rgba(255,255,255,0.02)" stroke="rgba(255,255,255,0.06)"></rect>
+      <text x="${localLeft}" y="${padT - 2}" class="path-axis-label">本地 RH</text>
       ${bandLabels}
       ${rects.join('')}
-      ${curveLine}
       ${curveMarkers.join('')}
       ${origin}
       ${xLabels}
     </svg>
     <div class="path-empty" style="margin-top:8px">${topSummary}</div>
+    <div class="path-empty">${localSummary}</div>
   `;
 }
 

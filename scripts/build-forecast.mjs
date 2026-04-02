@@ -22,7 +22,7 @@ const BASE_WEATHER_VARS = [
 const AIR_QUALITY_VARS = 'aerosol_optical_depth';
 
 const PRESSURE_LEVELS = [1000, 925, 850, 700, 600, 500, 400];
-const SAMPLE_DISTANCES_KM = [0, 60, 120, 220, 360, 540];
+const SAMPLE_DISTANCES_KM = [0, 30, 60, 90, 130, 180, 240, 320, 420, 540, 680, 840, 1000];
 const CONCURRENCY = 2;
 const EARTH_RADIUS_KM = 6371;
 
@@ -126,6 +126,14 @@ function cloudCoverWeight(cloudCover) {
   if (value <= 0) return 0;
   if (value >= 30) return 1;
   return value / 30;
+}
+
+function buildDistanceSamples(maxDistanceKm, count = 13) {
+  const n = Math.max(7, count);
+  return Array.from({ length: n }, (_, i) => {
+    const t = i / (n - 1);
+    return maxDistanceKm * Math.pow(t, 1.55);
+  });
 }
 
 function illuminationDistance(heightKm) {
@@ -266,7 +274,7 @@ function samplePointScore(samplePoint, index, distanceKm, curveHeightKm) {
   };
 }
 
-function evaluateEventAtHour({ city, baseWeather, sampleData, index, eventType, eventTime }) {
+function evaluateEventAtHour({ city, baseWeather, sampleData, index, eventType, eventTime, findNearestIndex }) {
   const hourly = baseWeather.hourly;
   const localTime = parseForecastTime(hourly.time[index]);
   const deltaMinutes = (localTime.getTime() - eventTime.getTime()) / 60000;
@@ -282,23 +290,72 @@ function evaluateEventAtHour({ city, baseWeather, sampleData, index, eventType, 
   }
 
   const sunPos = SunCalc.getPosition(eventTime, city.lat, city.lon);
+  const sunAzimuthDeg = toBearingFromSunCalcAzimuth(sunPos.azimuth);
   const sunAltitudeDeg = sunPos.altitude * 180 / Math.PI;
   const localLayers = makeLayerState(sampleData.local, index);
   const cloudBase = estimateCloudBase(localLayers);
   const cloudBaseKm = cloudBase.cloudBaseKm;
   const vertexKm = parabolaVertexKm(cloudBaseKm);
 
-  const pathProfile = sampleData[eventType].map((pt, pIdx) => {
-    const distanceKm = SAMPLE_DISTANCES_KM[pIdx];
-    const curveHeightKm = parabolaHeightKm(distanceKm, cloudBaseKm, vertexKm);
-    const sample = samplePointScore(pt, index, distanceKm, curveHeightKm);
+  const buildVariant = (offsetMinutes) => {
+    const sampleEventTime = new Date(eventTime.getTime() + offsetMinutes * 60000);
+    const sampleIndex = findNearestIndex(sampleEventTime);
+    const variantLayers = makeLayerState(sampleData.local, sampleIndex);
+    const variantCloudBase = estimateCloudBase(variantLayers);
+    const variantCloudBaseKm = variantCloudBase.cloudBaseKm;
+    const variantVertexKm = parabolaVertexKm(variantCloudBaseKm);
+    const variantSunPos = SunCalc.getPosition(sampleEventTime, city.lat, city.lon);
+    const variantSunAzimuthDeg = toBearingFromSunCalcAzimuth(variantSunPos.azimuth);
+    const variantSunAltitudeDeg = variantSunPos.altitude * 180 / Math.PI;
+    const maxDistanceKm = clamp(illuminationDistance(variantCloudBaseKm) * 1.35, 180, 1200);
+    const distanceSamples = buildDistanceSamples(maxDistanceKm, 13);
+    const pathProfile = distanceSamples.map((distanceKm, pIdx) => {
+      const curveHeightKm = parabolaHeightKm(distanceKm, variantCloudBaseKm, variantVertexKm);
+      const samplePoint = sampleData[eventType][pIdx] ?? sampleData[eventType][sampleData[eventType].length - 1];
+      const sample = samplePointScore(samplePoint, sampleIndex, distanceKm, curveHeightKm);
+      return {
+        distanceKm,
+        curveHeightKm,
+        vertexKm: variantVertexKm,
+        ...sample,
+      };
+    });
+
+    const blockedCount = pathProfile.filter((point) => point.blocked).length;
+    const blockedRatio = blockedCount / Math.max(pathProfile.length, 1);
+    const meanClear = pathProfile.reduce((sum, point) => sum + clamp((80 - point.curveHumidity) / 80, 0, 1), 0) / Math.max(pathProfile.length, 1);
+    const bestClearPoints = [...pathProfile].sort((a, b) => b.score - a.score).slice(0, 3);
+    const pathScore = bestClearPoints.reduce((sum, point) => sum + point.score, 0) / Math.max(bestClearPoints.length, 1);
+    const variantScore = clamp((0.65 * meanClear + 0.35 * pathScore) * (1 - blockedRatio * 0.95) * tf * aodClarity(hourly.aerosol_optical_depth?.[sampleIndex] ?? 0.2) * cloudCoverWeight(hourly.cloud_cover?.[sampleIndex] ?? Math.max(
+      hourly.cloud_cover_low?.[sampleIndex] ?? 0,
+      hourly.cloud_cover_mid?.[sampleIndex] ?? 0,
+      hourly.cloud_cover_high?.[sampleIndex] ?? 0,
+    )) * 5.0, 0, 5);
+
     return {
-      distanceKm,
-      curveHeightKm,
-      vertexKm,
-      ...sample,
+      offsetMinutes,
+      eventTime: sampleEventTime.toISOString(),
+      sampleIndex,
+      sunAltitudeDeg: variantSunAltitudeDeg,
+      sunAzimuthDeg: variantSunAzimuthDeg,
+      cloudBaseKm: variantCloudBaseKm,
+      cloudBaseSource: variantCloudBase.source,
+      vertexKm: variantVertexKm,
+      maxDistanceKm,
+      blockedCount,
+      blockedRatio,
+      score: variantScore,
+      pathScore,
+      meanClear,
+      pathProfile,
+      localLayers: variantLayers,
     };
-  });
+  };
+
+  const windowOffsets = [-60, -30, 0, 30, 60];
+  const windowProfiles = windowOffsets.map(buildVariant);
+  const centerVariant = windowProfiles.find((variant) => variant.offsetMinutes === 0) ?? windowProfiles[0];
+  const pathProfile = centerVariant.pathProfile;
 
   const blockedCount = pathProfile.filter((point) => point.blocked).length;
   const blockedRatio = blockedCount / Math.max(pathProfile.length, 1);
@@ -360,10 +417,13 @@ function evaluateEventAtHour({ city, baseWeather, sampleData, index, eventType, 
     },
     cloudBaseSource: cloudBase.source,
     sunAltitudeDeg,
+    sunAzimuthDeg,
     vertexKm,
     blockedCount,
     blockedRatio,
     pathProfile,
+    windowProfiles,
+    localLayers,
     strict: {
       algorithm: 'parabola-rh80-v2',
       samplePoints: SAMPLE_DISTANCES_KM.length,
@@ -418,6 +478,7 @@ function buildStrictForecast(city, baseWeather, sampleData) {
         index,
         eventType,
         eventTime,
+        findNearestIndex,
       });
 
       series.push({
