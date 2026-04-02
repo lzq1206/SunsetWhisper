@@ -111,10 +111,9 @@ function levelWeight(level) {
   return 0.7;
 }
 
-function timeFactor(eventType, deltaMinutes) {
-  const target = eventType === 'sunset' ? 35 : -35;
-  const window = 95;
-  return clamp(1 - Math.abs(deltaMinutes - target) / window, 0, 1);
+function timeFactor(deltaMinutes) {
+  const window = 120;
+  return clamp(1 - Math.abs(deltaMinutes) / window, 0, 1);
 }
 
 function aodClarity(aod) {
@@ -244,7 +243,7 @@ function evaluateEventAtHour({ city, baseWeather, sampleData, index, eventType, 
   const hourly = baseWeather.hourly;
   const localTime = parseForecastTime(hourly.time[index]);
   const deltaMinutes = (localTime.getTime() - eventTime.getTime()) / 60000;
-  const tf = timeFactor(eventType, deltaMinutes);
+  const tf = timeFactor(deltaMinutes);
   if (tf <= 0) {
     return {
       score: 0,
@@ -325,63 +324,68 @@ function buildStrictForecast(city, baseWeather, sampleData) {
   const hourly = baseWeather.hourly;
   if (!hourly?.time?.length) return { series: [], daily: [], best: null };
 
+  const hourlyTimes = hourly.time.map((t) => parseForecastTime(t));
+  const uniqueDays = [];
+  const seenDays = new Set();
+  for (const time of hourlyTimes) {
+    const day = localDayKey(time);
+    if (!seenDays.has(day)) {
+      seenDays.add(day);
+      uniqueDays.push({ day, anchor: time });
+    }
+  }
+
+  const findNearestIndex = (targetTime) => {
+    let bestIndex = 0;
+    let bestGap = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < hourlyTimes.length; i += 1) {
+      const gap = Math.abs(hourlyTimes[i].getTime() - targetTime.getTime());
+      if (gap < bestGap) {
+        bestGap = gap;
+        bestIndex = i;
+      }
+    }
+    return bestIndex;
+  };
+
   const series = [];
 
-  for (let i = 0; i < hourly.time.length; i += 1) {
-    const time = parseForecastTime(hourly.time[i]);
-    const sunTimes = SunCalc.getTimes(time, city.lat, city.lon);
-    const eventCandidates = [
-      { eventType: 'sunrise', eventTime: sunTimes.sunrise },
-      { eventType: 'sunset', eventTime: sunTimes.sunset },
-    ]
-      .map((item) => ({
-        ...item,
-        localScore: timeFactor(item.eventType, (time.getTime() - item.eventTime.getTime()) / 60000),
-      }))
-      .filter((item) => item.localScore > 0)
-      .sort((a, b) => b.localScore - a.localScore);
+  for (const { day } of uniqueDays) {
+    const eventBase = new Date(`${day}T12:00:00+08:00`);
+    const sunTimes = SunCalc.getTimes(eventBase, city.lat, city.lon);
 
-    const chosen = eventCandidates[0] ?? null;
-    const eventDetail = chosen
-      ? evaluateEventAtHour({
-          city,
-          baseWeather,
-          sampleData,
-          index: i,
-          eventType: chosen.eventType,
-          eventTime: chosen.eventTime,
-        })
-      : null;
+    for (const eventType of ['sunrise', 'sunset']) {
+      const eventTime = sunTimes[eventType];
+      if (!eventTime || Number.isNaN(eventTime.getTime())) continue;
+      const index = findNearestIndex(eventTime);
+      const eventDetail = evaluateEventAtHour({
+        city,
+        baseWeather,
+        sampleData,
+        index,
+        eventType,
+        eventTime,
+      });
 
-    const sunsetScore = eventDetail?.eventType === 'sunset' ? eventDetail.score : 0;
-    const sunriseScore = eventDetail?.eventType === 'sunrise' ? eventDetail.score : 0;
-    const score = eventDetail?.score ?? 0;
-
-    series.push({
-      time: time.toISOString(),
-      score,
-      sunsetScore,
-      sunriseScore,
-      detail: eventDetail,
-      cloudLow: hourly.cloud_cover_low?.[i] ?? 0,
-      cloudMid: hourly.cloud_cover_mid?.[i] ?? 0,
-      cloudHigh: hourly.cloud_cover_high?.[i] ?? 0,
-      aod: hourly.aerosol_optical_depth?.[i] ?? 0.2,
-    });
+      series.push({
+        day,
+        eventType,
+        time: eventTime.toISOString(),
+        score: eventDetail?.score ?? 0,
+        detail: eventDetail,
+        cloudLow: hourly.cloud_cover_low?.[index] ?? 0,
+        cloudMid: hourly.cloud_cover_mid?.[index] ?? 0,
+        cloudHigh: hourly.cloud_cover_high?.[index] ?? 0,
+        aod: hourly.aerosol_optical_depth?.[index] ?? 0.2,
+      });
+    }
   }
 
-  const grouped = new Map();
-  for (const point of series) {
-    const date = localDayKey(point.time);
-    if (!grouped.has(date)) grouped.set(date, []);
-    grouped.get(date).push(point);
-  }
-
-  const daily = [...grouped.entries()].map(([date, points]) => {
-    const sunset = points.reduce((best, cur) => (cur.sunsetScore > (best?.sunsetScore ?? -1) ? cur : best), null);
-    const sunrise = points.reduce((best, cur) => (cur.sunriseScore > (best?.sunriseScore ?? -1) ? cur : best), null);
-    const best = [sunset, sunrise].filter(Boolean).sort((a, b) => b.score - a.score)[0] ?? null;
-    return { date, sunset, sunrise, best };
+  const daily = uniqueDays.map(({ day }) => {
+    const sunrise = series.find((item) => item.day === day && item.eventType === 'sunrise') ?? null;
+    const sunset = series.find((item) => item.day === day && item.eventType === 'sunset') ?? null;
+    const best = [sunrise, sunset].filter(Boolean).sort((a, b) => b.score - a.score)[0] ?? null;
+    return { date: day, sunset, sunrise, best };
   });
 
   const best = [...series].sort((a, b) => b.score - a.score)[0] ?? null;

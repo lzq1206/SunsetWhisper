@@ -306,59 +306,60 @@ function renderChart(city) {
   const ctx = canvas.getContext('2d');
   if (chartInstance) chartInstance.destroy();
 
-  const now = new Date();
-  const startTime = new Date(now.getTime() - 12 * 60 * 60 * 1000);
-  const endTime = new Date(now.getTime() + 36 * 60 * 60 * 1000);
-  const filtered = city.forecast.series.filter((entry) => {
-    const time = new Date(entry.time);
-    return time >= startTime && time <= endTime;
-  });
+  const series = [...(city.forecast.series ?? [])].sort((a, b) => new Date(a.time) - new Date(b.time));
+  const labels = series.map((entry) => `${formatDate(entry.day)} · ${entry.eventType === 'sunrise' ? '日出' : '日落'}`);
+  const sunriseData = series.map((entry) => (entry.eventType === 'sunrise' ? Number(entry.score.toFixed(2)) : null));
+  const sunsetData = series.map((entry) => (entry.eventType === 'sunset' ? Number(entry.score.toFixed(2)) : null));
+  const cloudData = series.map((entry) => Number((entry.detail?.curveHumidity ?? entry.cloudMid ?? 0).toFixed(0)));
+  const blockedData = series.map((entry) => (entry.detail?.blocked ? 1 : 0));
 
   chartInstance = new Chart(ctx, {
     type: 'line',
     data: {
-      labels: filtered.map((entry) => formatAxisTime(entry.time)),
+      labels,
       datasets: [
         {
-          label: '晚霞',
-          data: filtered.map((entry) => entry.sunsetScore.toFixed(2)),
-          borderColor: '#ff6b35',
-          backgroundColor: 'rgba(255,107,53,0.12)',
-          borderWidth: 2,
-          tension: 0.3,
-          fill: true,
-          yAxisID: 'yScore',
-          pointRadius: 2,
-        },
-        {
-          label: '朝霞',
-          data: filtered.map((entry) => entry.sunriseScore.toFixed(2)),
+          label: '日出',
+          data: sunriseData,
           borderColor: '#f7c59f',
           backgroundColor: 'rgba(247,197,159,0.10)',
           borderWidth: 2,
-          tension: 0.3,
-          fill: true,
+          tension: 0.25,
+          fill: false,
           yAxisID: 'yScore',
-          pointRadius: 2,
+          pointRadius: 3,
+          spanGaps: false,
         },
         {
-          label: '低云量 %',
-          data: filtered.map((entry) => entry.cloudLow),
+          label: '日落',
+          data: sunsetData,
+          borderColor: '#ff6b35',
+          backgroundColor: 'rgba(255,107,53,0.12)',
+          borderWidth: 2,
+          tension: 0.25,
+          fill: false,
+          yAxisID: 'yScore',
+          pointRadius: 3,
+          spanGaps: false,
+        },
+        {
+          label: '曲线RH %',
+          data: cloudData,
           borderColor: '#90caf9',
           borderWidth: 1,
           borderDash: [3, 3],
-          tension: 0.2,
+          tension: 0.1,
           yAxisID: 'yCloud',
           pointRadius: 0,
         },
         {
-          label: '高云量 %',
-          data: filtered.map((entry) => entry.cloudHigh),
-          borderColor: '#ce93d8',
+          label: '遮挡',
+          data: blockedData,
+          borderColor: '#ff4d4f',
+          backgroundColor: 'rgba(255,77,79,0.16)',
           borderWidth: 1,
-          borderDash: [3, 3],
-          tension: 0.2,
-          yAxisID: 'yCloud',
+          tension: 0,
+          yAxisID: 'yBlock',
           pointRadius: 0,
         },
       ],
@@ -373,7 +374,7 @@ function renderChart(city) {
       },
       scales: {
         x: {
-          ticks: { color: '#aab4c3', maxTicksLimit: 12, maxRotation: 0 },
+          ticks: { color: '#aab4c3', maxRotation: 0, autoSkip: true },
           grid: { color: 'rgba(255,255,255,0.05)' },
         },
         yScore: {
@@ -388,9 +389,14 @@ function renderChart(city) {
           position: 'right',
           min: 0,
           max: 100,
-          title: { display: true, text: '云量 %', color: '#aab4c3', font: { size: 11 } },
+          title: { display: true, text: '曲线 RH %', color: '#aab4c3', font: { size: 11 } },
           ticks: { color: '#aab4c3' },
           grid: { drawOnChartArea: false },
+        },
+        yBlock: {
+          display: false,
+          min: 0,
+          max: 1,
         },
       },
     },
