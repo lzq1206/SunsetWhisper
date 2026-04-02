@@ -344,6 +344,24 @@ function renderDailyList(city) {
   }).join('');
 }
 
+function renderFactorBreakdown(city) {
+  const root = document.getElementById('panel-factor-list');
+  if (!root || !city) return;
+  const factors = city.forecast.best?.detail?.factorBreakdown ?? [];
+  if (!factors.length) {
+    root.innerHTML = '<div class="path-empty">暂无因素分解数据</div>';
+    return;
+  }
+
+  root.innerHTML = factors.map((factor) => `
+    <div class="factor-row">
+      <div class="factor-name">${factor.label}</div>
+      <div class="factor-bar"><span style="width:${factor.percent.toFixed(1)}%"></span></div>
+      <div class="factor-value">${factor.percent.toFixed(1)}%</div>
+    </div>
+  `).join('');
+}
+
 function renderChart(city) {
   const canvas = document.getElementById('forecast-chart');
   if (!canvas || !city) return;
@@ -475,6 +493,7 @@ function renderPanel(city) {
   document.getElementById('panel-cloud-high').textContent = `${Math.round(best?.detail?.cloudHigh ?? 0)}%`;
   document.getElementById('panel-cloud-total').textContent = `${Math.round(best?.detail?.cloudCoverTotal ?? 0)}% / ${(best?.detail?.cloudWeight ?? 0).toFixed(2)}`;
 
+  renderFactorBreakdown(city);
   renderPathDiagram(city);
   renderChart(city);
   renderDailyList(city);

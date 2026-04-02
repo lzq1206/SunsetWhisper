@@ -313,7 +313,24 @@ function evaluateEventAtHour({ city, baseWeather, sampleData, index, eventType, 
     hourly.cloud_cover_high?.[index] ?? 0,
   );
   const cloudWeight = cloudCoverWeight(cloudCoverTotal);
-  const finalScore = clamp((0.65 * meanClear + 0.35 * pathScore) * (1 - blockedRatio * 0.95) * tf * clarity * cloudWeight * 5.0, 0, 5);
+  const pathClearTerm = 0.65 * meanClear;
+  const pathTopTerm = 0.35 * pathScore;
+  const blockageTerm = 1 - blockedRatio * 0.95;
+  const factorTerms = [
+    { key: 'pathClear', label: '路径清晰度', value: pathClearTerm },
+    { key: 'pathTop', label: '路径顶点清晰度', value: pathTopTerm },
+    { key: 'blockage', label: '遮挡惩罚', value: blockageTerm },
+    { key: 'timeWindow', label: '时效窗口', value: tf },
+    { key: 'aod', label: 'AOD 通透度', value: clarity },
+    { key: 'cloudWeight', label: '总云量权重', value: cloudWeight },
+  ];
+  const factorSum = factorTerms.reduce((sum, item) => sum + Math.max(0, item.value), 0) || 1;
+  const factorBreakdown = factorTerms.map((item) => ({
+    ...item,
+    percent: (Math.max(0, item.value) / factorSum) * 100,
+  }));
+
+  const finalScore = clamp((pathClearTerm + pathTopTerm) * blockageTerm * tf * clarity * cloudWeight * 5.0, 0, 5);
 
   const dominantLayer = localLayers
     .filter((layer) => layer.rh >= THRESHOLDS.cloudBlock.rh)
@@ -335,6 +352,7 @@ function evaluateEventAtHour({ city, baseWeather, sampleData, index, eventType, 
     rawScore: pathScore,
     coverage: 1 - blockedRatio,
     pathMean: meanClear,
+    factorBreakdown,
     dominantLayer: {
       layer: dominantLayer == null ? cloudBase.source : dominantLayer.level >= 700 ? 'low-mid' : 'high',
       pressureLevel: dominantLayer?.level ?? null,
