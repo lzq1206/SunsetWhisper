@@ -104,17 +104,12 @@ function pressureLevelLabel(level) {
 }
 
 function pressureLevelColor(level, rh) {
-  const opacity = Math.max(0.08, Math.min(0.92, (rh ?? 0) / 100));
-  const palette = {
-    1000: `rgba(96, 165, 250, ${opacity})`,
-    925: `rgba(56, 189, 248, ${opacity})`,
-    850: `rgba(34, 211, 238, ${opacity})`,
-    700: `rgba(251, 146, 60, ${opacity})`,
-    600: `rgba(249, 115, 22, ${opacity})`,
-    500: `rgba(192, 132, 252, ${opacity})`,
-    400: `rgba(236, 72, 153, ${opacity})`,
-  };
-  return palette[level] ?? `rgba(148, 163, 184, ${opacity})`;
+  const humidity = rh ?? 0;
+  if (humidity < 80) return 'rgba(160, 160, 160, 0.04)';
+  const t = Math.min(1, Math.max(0, (humidity - 80) / 20));
+  const gray = Math.round(160 + (255 - 160) * t);
+  const opacity = 0.18 + t * 0.72;
+  return `rgba(${gray}, ${gray}, ${gray}, ${opacity})`;
 }
 
 function renderPathDiagram(city) {
@@ -163,7 +158,7 @@ function renderPathDiagram(city) {
     point.layers.forEach((layer, layerIdx) => {
       const y = padT + layerIdx * bandH;
       rects.push(`
-        <rect x="${(x - cellW / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${cellW.toFixed(1)}" height="${bandH.toFixed(1)}" fill="${pressureLevelColor(layer.level, layer.rh)}" opacity="${layer.rh >= 80 ? 1 : 0.16}"></rect>
+        <rect x="${(x - cellW / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${cellW.toFixed(1)}" height="${bandH.toFixed(1)}" fill="${pressureLevelColor(layer.level, layer.rh)}"></rect>
       `);
     });
     const rayY = yFor(point.curveHeightKm ?? 0.35);

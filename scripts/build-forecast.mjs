@@ -141,8 +141,27 @@ function layerDefaultHeightKm(level) {
   return 8.0;
 }
 
-function estimateCloudBase(layers) {
-  const present = layers.filter((layer) => layer.rh >= THRESHOLDS.cloudPresent.rh && layer.cloudCover >= THRESHOLDS.cloudPresent.cloudCover);
+function estimateCloudBase(layers, gfsCloudBaseKm = null) {
+  if (gfsCloudBaseKm != null && Number.isFinite(gfsCloudBaseKm)) {
+    return {
+      cloudBaseKm: gfsCloudBaseKm,
+      source: 'gfs-cloud-base',
+    };
+  }
+
+  const sorted = [...layers].sort((a, b) => a.heightKm - b.heightKm);
+  for (let i = 0; i < sorted.length - 1; i += 1) {
+    const low = sorted[i];
+    const high = sorted[i + 1];
+    if (low.rh >= 85 && high.rh >= 85) {
+      return {
+        cloudBaseKm: low.heightKm,
+        source: 'rh85-continuous-2',
+      };
+    }
+  }
+
+  const present = sorted.filter((layer) => layer.rh >= THRESHOLDS.cloudPresent.rh && layer.cloudCover >= THRESHOLDS.cloudPresent.cloudCover);
   if (present.length) {
     return {
       cloudBaseKm: present[0].heightKm,
@@ -150,7 +169,7 @@ function estimateCloudBase(layers) {
     };
   }
 
-  const softer = layers.filter((layer) => layer.rh >= 70 && layer.cloudCover >= 5);
+  const softer = sorted.filter((layer) => layer.rh >= 70 && layer.cloudCover >= 5);
   if (softer.length) {
     return {
       cloudBaseKm: softer[0].heightKm,
@@ -213,7 +232,8 @@ function parabolaHeightKm(distanceKm, cloudBaseKm, vertexKm) {
 
 function samplePointScore(samplePoint, index, distanceKm, curveHeightKm) {
   const layers = makeLayerState(samplePoint, index);
-  const cloudBase = estimateCloudBase(layers);
+  const gfsCloudBase = samplePoint.hourly?.cloud_base_height?.[index] ?? null;
+  const cloudBase = estimateCloudBase(layers, gfsCloudBase != null ? gfsCloudBase / 1000 : null);
   const curveHumidity = interpolateHumidity(layers, curveHeightKm);
   const blocked = curveHumidity >= 80;
 
