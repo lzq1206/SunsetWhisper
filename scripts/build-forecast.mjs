@@ -128,11 +128,11 @@ function cloudCoverWeight(cloudCover) {
   return value / 30;
 }
 
-function buildDistanceSamples(maxDistanceKm, count = 17) {
-  const n = Math.max(7, count);
+function buildDistanceSamples(maxDistanceKm, count = 21) {
+  const n = Math.max(9, count);
   return Array.from({ length: n }, (_, i) => {
     const t = i / (n - 1);
-    return maxDistanceKm * Math.pow(t, 1.55);
+    return maxDistanceKm * Math.pow(t, 1.45);
   });
 }
 
@@ -165,60 +165,36 @@ function estimateCloudBase(layers, gfsCloudBaseKm = null) {
   }
 
   const sorted = [...layers].sort((a, b) => a.heightKm - b.heightKm);
-  const findRunStart = (minHeightKm = 0) => {
-    for (let i = 0; i < sorted.length - 1; i += 1) {
-      const low = sorted[i];
-      const high = sorted[i + 1];
-      if (low.heightKm >= minHeightKm && low.rh >= 85 && high.rh >= 85) {
-        return low;
-      }
+  let lowBand = null;
+  let highBand = null;
+
+  for (let i = 0; i < sorted.length - 1; i += 1) {
+    const low = sorted[i];
+    const high = sorted[i + 1];
+    if (low.rh >= 85 && high.rh >= 85) {
+      if (low.heightKm <= 1.0 && !lowBand) lowBand = low;
+      if (low.heightKm > 1.0 && !highBand) highBand = low;
     }
-    return null;
-  };
-
-  const lowBase = findRunStart(0);
-  if (lowBase && lowBase.heightKm <= 1.0) {
-    return {
-      cloudBaseKm: lowBase.heightKm,
-      source: 'rh85-continuous-low',
-    };
   }
 
-  const upperBase = findRunStart(1.0);
-  if (upperBase) {
-    return {
-      cloudBaseKm: upperBase.heightKm,
-      source: 'rh85-continuous-high',
-    };
+  if (lowBand) {
+    return { cloudBaseKm: lowBand.heightKm, source: 'rh85-continuous-low' };
   }
-
-  if (lowBase) {
-    return {
-      cloudBaseKm: lowBase.heightKm,
-      source: 'rh85-continuous-fallback',
-    };
+  if (highBand) {
+    return { cloudBaseKm: highBand.heightKm, source: 'rh85-continuous-high' };
   }
 
   const present = sorted.filter((layer) => layer.rh >= THRESHOLDS.cloudPresent.rh && layer.cloudCover >= THRESHOLDS.cloudPresent.cloudCover);
   if (present.length) {
-    return {
-      cloudBaseKm: present[0].heightKm,
-      source: 'observed',
-    };
+    return { cloudBaseKm: present[0].heightKm, source: 'observed' };
   }
 
   const softer = sorted.filter((layer) => layer.rh >= 70 && layer.cloudCover >= 5);
   if (softer.length) {
-    return {
-      cloudBaseKm: softer[0].heightKm,
-      source: 'soft-rh70',
-    };
+    return { cloudBaseKm: softer[0].heightKm, source: 'soft-rh70' };
   }
 
-  return {
-    cloudBaseKm: 1.5,
-    source: 'fallback-1.5km',
-  };
+  return { cloudBaseKm: 1.5, source: 'fallback-1.5km' };
 }
 
 function interpolateHumidity(layers, heightKm) {
@@ -330,8 +306,8 @@ function evaluateEventAtHour({ city, baseWeather, sampleData, index, eventType, 
     const variantSunPos = SunCalc.getPosition(sampleEventTime, city.lat, city.lon);
     const variantSunAzimuthDeg = toBearingFromSunCalcAzimuth(variantSunPos.azimuth);
     const variantSunAltitudeDeg = variantSunPos.altitude * 180 / Math.PI;
-    const maxDistanceKm = clamp(illuminationDistance(variantCloudBaseKm) * 1.35, 180, 1000);
-    const distanceSamples = buildDistanceSamples(maxDistanceKm, 17);
+    const maxDistanceKm = 1000;
+    const distanceSamples = buildDistanceSamples(maxDistanceKm, 21);
     const pathProfile = distanceSamples.map((distanceKm, pIdx) => {
       const curveHeightKm = parabolaHeightKm(distanceKm, variantCloudBaseKm, variantVertexKm);
       const samplePoint = sampleData[eventType][pIdx] ?? sampleData[eventType][sampleData[eventType].length - 1];
