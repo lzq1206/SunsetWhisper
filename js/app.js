@@ -162,6 +162,7 @@ function renderPathDiagramForEvent(city, eventType, diagramId, metaId) {
   const markerEls = [];
 
   const localLayers = [...(centerProfile?.localLayers ?? detail.localLayers ?? [])].sort((a, b) => a.heightKm - b.heightKm);
+  const hasLocalCloud = localLayers.some((layer) => layer.rh >= 80);
   if (localLayers.length) {
     localLayers.forEach((layer, layerIdx) => {
       const topKm = layer.heightKm;
@@ -172,31 +173,33 @@ function renderPathDiagramForEvent(city, eventType, diagramId, metaId) {
     });
   }
 
-  centerProfile.pathProfile.forEach((point) => {
-    const x = xFor(point.distanceKm);
-    const cellW = 10;
-    [...point.layers].sort((a, b) => a.heightKm - b.heightKm).forEach((layer, layerIdx, sortedLayers) => {
-      const topKm = layer.heightKm;
-      const bottomKm = sortedLayers[layerIdx + 1]?.heightKm ?? 12;
-      const y = yFor(bottomKm);
-      const h = Math.max(3, yFor(topKm) - yFor(bottomKm));
-      rects.push(`<rect x="${(x - cellW / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${cellW.toFixed(1)}" height="${h.toFixed(1)}" fill="${pressureLevelColor(layer.level, layer.rh)}"></rect>`);
-    });
-  });
-
-  profiles.forEach((variant) => {
-    const profile = variant.pathProfile ?? [];
-    const isCenter = variant.offsetMinutes === 0;
-    const stroke = isCenter ? '#ff7a45' : (variant.offsetMinutes < 0 ? 'rgba(255, 208, 138, 0.56)' : 'rgba(255, 208, 138, 0.36)');
-    const dash = isCenter ? '' : '6 5';
-    const widthStroke = isCenter ? 3 : 1.6;
-    lineEls.push(`<polyline points="${profile.map((point) => `${xFor(point.distanceKm).toFixed(1)},${yFor(point.curveHeightKm ?? 0.35).toFixed(1)}`).join(' ')}" fill="none" stroke="${stroke}" stroke-width="${widthStroke}" stroke-dasharray="${dash}"></polyline>`);
-    profile.forEach((point) => {
+  if (hasLocalCloud) {
+    centerProfile.pathProfile.forEach((point) => {
       const x = xFor(point.distanceKm);
-      const rayY = yFor(point.curveHeightKm ?? 0.35);
-      markerEls.push(`<circle cx="${x.toFixed(1)}" cy="${rayY.toFixed(1)}" r="${point.blocked ? 4.2 : 2.0}" fill="${point.blocked ? '#ff4d4f' : '#7bd989'}" stroke="#fff" stroke-width="0.7"></circle>`);
+      const cellW = 10;
+      [...point.layers].sort((a, b) => a.heightKm - b.heightKm).forEach((layer, layerIdx, sortedLayers) => {
+        const topKm = layer.heightKm;
+        const bottomKm = sortedLayers[layerIdx + 1]?.heightKm ?? 12;
+        const y = yFor(bottomKm);
+        const h = Math.max(3, yFor(topKm) - yFor(bottomKm));
+        rects.push(`<rect x="${(x - cellW / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${cellW.toFixed(1)}" height="${h.toFixed(1)}" fill="${pressureLevelColor(layer.level, layer.rh)}"></rect>`);
+      });
     });
-  });
+
+    profiles.forEach((variant) => {
+      const profile = variant.pathProfile ?? [];
+      const isCenter = variant.offsetMinutes === 0;
+      const stroke = isCenter ? '#ff7a45' : (variant.offsetMinutes < 0 ? 'rgba(255, 208, 138, 0.56)' : 'rgba(255, 208, 138, 0.36)');
+      const dash = isCenter ? '' : '6 5';
+      const widthStroke = isCenter ? 3 : 1.6;
+      lineEls.push(`<polyline points="${profile.map((point) => `${xFor(point.distanceKm).toFixed(1)},${yFor(point.curveHeightKm ?? 0.35).toFixed(1)}`).join(' ')}" fill="none" stroke="${stroke}" stroke-width="${widthStroke}" stroke-dasharray="${dash}"></polyline>`);
+      profile.forEach((point) => {
+        const x = xFor(point.distanceKm);
+        const rayY = yFor(point.curveHeightKm ?? 0.35);
+        markerEls.push(`<circle cx="${x.toFixed(1)}" cy="${rayY.toFixed(1)}" r="${point.blocked ? 4.2 : 2.0}" fill="${point.blocked ? '#ff4d4f' : '#7bd989'}" stroke="#fff" stroke-width="0.7"></circle>`);
+      });
+    });
+  }
 
   const origin = `<circle class="path-origin" cx="${originX}" cy="${originY}" r="5"></circle><text x="${originX - 2}" y="${originY - 8}" class="path-axis-label">城市云底</text>`;
   const xLabels = Array.from({ length: 6 }, (_, i) => {
@@ -209,7 +212,7 @@ function renderPathDiagramForEvent(city, eventType, diagramId, metaId) {
     return `<text x="12" y="${(y + 3).toFixed(1)}" class="path-band-label">${label}</text>`;
   }).join('');
 
-  const topSummary = centerProfile.pathProfile.slice(0, 4).map((point) => {
+  const topSummary = (hasLocalCloud ? centerProfile.pathProfile : []).slice(0, 4).map((point) => {
     const d = point.distanceKm.toFixed(0);
     const h = point.curveHeightKm?.toFixed(2) ?? '—';
     const rh = point.curveHumidity?.toFixed(0) ?? '—';
@@ -231,7 +234,7 @@ function renderPathDiagramForEvent(city, eventType, diagramId, metaId) {
       ${origin}
       ${xLabels}
     </svg>
-    <div class="path-empty" style="margin-top:8px">${topSummary}</div>
+    <div class="path-empty" style="margin-top:8px">${hasLocalCloud ? topSummary : '本地无云，光路不显示'}</div>
     <div class="path-empty">${localSummary}</div>
   `;
 }
