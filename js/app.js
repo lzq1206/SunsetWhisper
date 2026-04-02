@@ -146,8 +146,14 @@ function renderPathDiagramForEvent(city, eventType, diagramId, metaId) {
   const localRight = padL + 72;
   const curveLeft = padL + 90;
   const maxDist = 1000;
-  const xFor = (d) => curveLeft + (Math.min(Math.max(d, 0), maxDist) / maxDist) * (plotW - (curveLeft - padL) - 8);
+  const innerW = plotW - (curveLeft - padL) - 8;
+  const xFor = (d) => curveLeft + (Math.min(Math.max(d, 0), maxDist) / maxDist) * innerW;
   const yFor = (km) => padT + plotH - Math.min(Math.max(km, 0), 12) / 12 * plotH;
+  const groundY = (x) => {
+    const t = (x - curveLeft) / Math.max(innerW, 1e-6);
+    const sag = 18;
+    return padT + plotH - 12 - sag * (1 - Math.pow(2 * t - 1, 2));
+  };
   const originY = yFor(centerProfile?.cloudBaseKm ?? 0.1);
   const originX = curveLeft - 4;
 
@@ -217,6 +223,7 @@ function renderPathDiagramForEvent(city, eventType, diagramId, metaId) {
     <svg viewBox="0 0 ${width} ${height}" class="path-svg" role="img" aria-label="${eventName}光路分层剖面">
       <rect x="${padL}" y="${padT}" width="${plotW}" height="${plotH}" rx="10" fill="rgba(255,255,255,0.02)" stroke="rgba(255,255,255,0.06)"></rect>
       <text x="${localLeft}" y="${padT - 2}" class="path-axis-label">本地 RH</text>
+      <path d="M ${curveLeft} ${groundY(curveLeft).toFixed(1)} Q ${(curveLeft + innerW / 2).toFixed(1)} ${(groundY(curveLeft + innerW / 2) - 14).toFixed(1)} ${curveLeft + innerW} ${groundY(curveLeft + innerW).toFixed(1)}" fill="none" stroke="rgba(255,255,255,0.18)" stroke-width="2"></path>
       ${bandLabels}
       ${rects.join('')}
       ${lineEls.join('')}
