@@ -45,6 +45,8 @@
     </section>
 
     <main id="main">
+      <button id="btn-toggle-list" title="展开 / 收起城市排行">☰</button>
+
       <aside id="city-sidebar">
         <div id="city-sidebar-header">
           <span>城市排行</span>
@@ -53,9 +55,29 @@
         <div id="city-list"></div>
       </aside>
 
-      <div id="map"></div>
+      <section id="map-stack">
+        <article class="map-card">
+          <div class="map-card-header">
+            <div>
+              <div class="map-card-title">晚霞地图</div>
+              <div class="map-card-subtitle">按日落时刻评分</div>
+            </div>
+            <div class="map-card-meta" id="map-sunset-meta">—</div>
+          </div>
+          <div id="map-sunset" class="map-canvas"></div>
+        </article>
 
-      <button id="btn-toggle-list" title="展开 / 收起城市排行">☰</button>
+        <article class="map-card">
+          <div class="map-card-header">
+            <div>
+              <div class="map-card-title">朝霞地图</div>
+              <div class="map-card-subtitle">按日出时刻评分</div>
+            </div>
+            <div class="map-card-meta" id="map-sunrise-meta">—</div>
+          </div>
+          <div id="map-sunrise" class="map-canvas"></div>
+        </article>
+      </section>
 
       <aside id="city-panel" class="hidden">
         <div id="panel-header">
@@ -110,7 +132,7 @@
         </section>
 
         <section id="panel-chart-container">
-          <div id="panel-chart-title">48 小时朝霞 / 晚霞走势</div>
+          <div id="panel-chart-title">日出 / 日落走势</div>
           <canvas id="forecast-chart"></canvas>
         </section>
 
@@ -121,8 +143,7 @@
 
         <section id="about-section">
           <strong>方法说明</strong><br>
-          采用 GFS 分层湿度 + 分层云量 + AOD，以观测城市云底为起点构造抛物线路径，沿路径检查分层湿度；若路径点 RH ≥ 80，则判为遮挡。<br>
-          页面每天自动重算，并在 GitHub Actions 中刷新静态数据。
+          采用 GFS 分层湿度 + 分层云量 + AOD，以观测城市云底为起点构造抛物线路径，沿路径检查分层湿度；若路径点 RH ≥ 80，则判为遮挡。
         </section>
       </aside>
 

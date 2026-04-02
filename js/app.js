@@ -12,16 +12,18 @@ import {
 'use strict';
 
 const STATIC_DATA_URL = './data/latest.json';
-const CACHE_KEY = 'sunsetwhisper.static-cache.v4';
+const CACHE_KEY = 'sunsetwhisper.static-cache.v5';
 const CACHE_TTL_MS = 3 * 60 * 60 * 1000;
 const OPEN_METEO_URL = 'https://api.open-meteo.com/v1/gfs';
 const AIR_QUALITY_URL = 'https://air-quality-api.open-meteo.com/v1/air-quality';
 const WEATHER_VARS = ['cloud_cover', 'cloud_cover_low', 'cloud_cover_mid', 'cloud_cover_high'].join(',');
 const AIR_QUALITY_VARS = 'aerosol_optical_depth';
 
-let map = null;
+const EVENT_ORDER = ['sunset', 'sunrise'];
+
+let maps = { sunset: null, sunrise: null };
+let mapMarkers = { sunset: {}, sunrise: {} };
 let chartInstance = null;
-let cityMarkers = {};
 let selectedCityId = null;
 let cityStates = [];
 let refreshTimer = null;
@@ -42,8 +44,8 @@ function updateDataInfo(payload) {
   if (hero) hero.textContent = generatedAt.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
 }
 
-function initMap() {
-  map = L.map('map', {
+function initEventMap(containerId) {
+  const map = L.map(containerId, {
     center: [35.5, 103],
     zoom: 4,
     zoomControl: true,
@@ -54,6 +56,8 @@ function initMap() {
     attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
     maxZoom: 18,
   }).addTo(map);
+
+  return map;
 }
 
 function createCityIcon(score) {
@@ -73,6 +77,20 @@ function bestEventLabel(entry) {
   const { label } = scoreLabel(entry.score);
   const when = entry.detail?.eventType === 'sunrise' ? '朝霞' : '晚霞';
   return `${when} · ${label} ${entry.score.toFixed(2)}`;
+}
+
+function getEventEntry(city, eventType) {
+  const day = city.forecast?.daily?.[0];
+  const eventEntry = day?.[eventType] ?? null;
+  if (eventEntry) return eventEntry;
+  return city.forecast?.series?.find((entry) => entry.eventType === eventType) ?? null;
+}
+
+function getMapMetaText(entry) {
+  if (!entry) return '暂无数据';
+  const eventName = entry.eventType === 'sunrise' ? '朝霞' : '晚霞';
+  const score = scoreLabel(entry.score).label;
+  return `${eventName} · ${score} ${(entry.score ?? 0).toFixed(2)}`;
 }
 
 function pressureLevelLabel(level) {
@@ -224,23 +242,46 @@ function renderHero() {
   }
 }
 
-function renderMarkers() {
-  Object.values(cityMarkers).forEach((marker) => map.removeLayer(marker));
-  cityMarkers = {};
+function clearMarkers(mapKey) {
+  const map = maps[mapKey];
+  if (!map) return;
+  Object.values(mapMarkers[mapKey] || {}).forEach((marker) => map.removeLayer(marker));
+  mapMarkers[mapKey] = {};
+}
+
+function renderEventMap(mapKey) {
+  const map = maps[mapKey];
+  if (!map) return;
+  clearMarkers(mapKey);
 
   cityStates.forEach((city) => {
-    const score = city.forecast.best?.score ?? 0;
+    const entry = getEventEntry(city, mapKey);
+    const score = entry?.score ?? 0;
     const marker = L.marker([city.lat, city.lon], {
       icon: createCityIcon(score),
-      title: city.name,
+      title: `${city.name} · ${mapKey === 'sunrise' ? '朝霞' : '晚霞'}`,
     });
     marker.on('click', () => selectCity(city.id));
     marker.bindTooltip(
-      `<b>${city.name}</b><br>${bestEventLabel(city.forecast.best)}`,
+      `<b>${city.name}</b><br>${getMapMetaText({ ...entry, eventType: mapKey })}`,
       { direction: 'top', offset: [0, -10] },
     );
     marker.addTo(map);
-    cityMarkers[city.id] = marker;
+    mapMarkers[mapKey][city.id] = marker;
+  });
+}
+
+function renderMarkers() {
+  EVENT_ORDER.forEach((eventType) => {
+    renderEventMap(eventType);
+    const meta = document.getElementById(eventType === 'sunset' ? 'map-sunset-meta' : 'map-sunrise-meta');
+    const top = [...cityStates]
+      .map((city) => ({ city, entry: getEventEntry(city, eventType) }))
+      .filter(({ entry }) => entry)
+      .sort((a, b) => (b.entry?.score ?? 0) - (a.entry?.score ?? 0))[0];
+    if (meta) {
+      meta.textContent = top ? `${top.city.name} · ${top.entry.score.toFixed(2)}` : '暂无数据';
+    }
   });
 }
 
@@ -269,7 +310,12 @@ function renderCityList() {
       const cityId = el.dataset.id;
       selectCity(cityId);
       const city = getCityState(cityId);
-      if (city) map.setView([city.lat, city.lon], Math.max(map.getZoom(), 6), { animate: true });
+      if (city) {
+        EVENT_ORDER.forEach((eventType) => {
+          const map = maps[eventType];
+          if (map) map.setView([city.lat, city.lon], Math.max(map.getZoom(), 6), { animate: true });
+        });
+      }
     });
   });
 }
@@ -443,6 +489,14 @@ function selectCity(cityId) {
   document.getElementById('city-panel')?.classList.remove('hidden');
 }
 
+function focusCityOnMaps(city) {
+  if (!city) return;
+  EVENT_ORDER.forEach((eventType) => {
+    const map = maps[eventType];
+    if (map) map.setView([city.lat, city.lon], Math.max(map.getZoom(), 6), { animate: true });
+  });
+}
+
 function renderAll(payload) {
   hydrateCityStates(payload);
   renderHero();
@@ -465,11 +519,15 @@ function renderAll(payload) {
 
   if (selectedCityId) {
     const city = getCityState(selectedCityId);
-    if (city) renderPanel(city);
+    if (city) {
+      renderPanel(city);
+      focusCityOnMaps(city);
+    }
   } else if (ranked[0]) {
     renderPanel(ranked[0]);
     selectedCityId = ranked[0].id;
     document.getElementById('city-panel')?.classList.remove('hidden');
+    focusCityOnMaps(ranked[0]);
   }
 }
 
@@ -597,7 +655,8 @@ function scheduleRefresh() {
 }
 
 async function main() {
-  initMap();
+  maps.sunset = initEventMap('map-sunset');
+  maps.sunrise = initEventMap('map-sunrise');
   bindEvents();
   setLoading(true, '正在获取 GFS 分层数据…');
   const payload = await loadPayload();
