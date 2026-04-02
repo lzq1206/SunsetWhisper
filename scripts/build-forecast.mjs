@@ -22,7 +22,7 @@ const BASE_WEATHER_VARS = [
 const AIR_QUALITY_VARS = 'aerosol_optical_depth';
 
 const PRESSURE_LEVELS = [1000, 925, 850, 700, 600, 500, 400];
-const SAMPLE_DISTANCES_KM = [0, 30, 60, 90, 130, 180, 240, 320, 420, 540, 680, 840, 1000];
+const SAMPLE_DISTANCES_KM = [0, 20, 40, 60, 80, 110, 140, 180, 230, 290, 360, 450, 550, 650, 760, 880, 1000];
 const CONCURRENCY = 2;
 const EARTH_RADIUS_KM = 6371;
 
@@ -128,7 +128,7 @@ function cloudCoverWeight(cloudCover) {
   return value / 30;
 }
 
-function buildDistanceSamples(maxDistanceKm, count = 13) {
+function buildDistanceSamples(maxDistanceKm, count = 17) {
   const n = Math.max(7, count);
   return Array.from({ length: n }, (_, i) => {
     const t = i / (n - 1);
@@ -307,8 +307,8 @@ function evaluateEventAtHour({ city, baseWeather, sampleData, index, eventType, 
     const variantSunPos = SunCalc.getPosition(sampleEventTime, city.lat, city.lon);
     const variantSunAzimuthDeg = toBearingFromSunCalcAzimuth(variantSunPos.azimuth);
     const variantSunAltitudeDeg = variantSunPos.altitude * 180 / Math.PI;
-    const maxDistanceKm = clamp(illuminationDistance(variantCloudBaseKm) * 1.35, 180, 1200);
-    const distanceSamples = buildDistanceSamples(maxDistanceKm, 13);
+    const maxDistanceKm = clamp(illuminationDistance(variantCloudBaseKm) * 1.35, 180, 1000);
+    const distanceSamples = buildDistanceSamples(maxDistanceKm, 17);
     const pathProfile = distanceSamples.map((distanceKm, pIdx) => {
       const curveHeightKm = parabolaHeightKm(distanceKm, variantCloudBaseKm, variantVertexKm);
       const samplePoint = sampleData[eventType][pIdx] ?? sampleData[eventType][sampleData[eventType].length - 1];
@@ -426,8 +426,8 @@ function evaluateEventAtHour({ city, baseWeather, sampleData, index, eventType, 
     localLayers,
     strict: {
       algorithm: 'parabola-rh80-v2',
-      samplePoints: SAMPLE_DISTANCES_KM.length,
-      pathDistancesKm: SAMPLE_DISTANCES_KM,
+      samplePoints: pathProfile.length,
+      pathDistancesKm: pathProfile.map((point) => point.distanceKm),
       rhThreshold: 80,
     },
   };

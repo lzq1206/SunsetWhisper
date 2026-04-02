@@ -447,6 +447,43 @@ button, input, textarea, select { font: inherit; }
   color: var(--muted);
   margin-bottom: 10px;
 }
+#panel-path-note {
+  margin-bottom: 10px;
+  color: var(--accent2);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.path-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.path-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 10px;
+}
+.path-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 8px;
+}
+.path-card-title {
+  font-size: 13px;
+  font-weight: 700;
+}
+.path-card-subtitle {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+  line-height: 1.4;
+}
+#panel-sunset-path-diagram,
+#panel-sunrise-path-diagram {
+  min-height: 250px;
+}
 #panel-factor-note {
   margin-bottom: 10px;
   color: var(--accent2);
@@ -651,6 +688,7 @@ button, input, textarea, select { font: inherit; }
   #main { grid-template-columns: 1fr; }
   #city-panel { width: 100%; height: auto; min-height: 520px; }
   .map-card { min-height: 300px; }
+  .path-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 720px) {
@@ -670,4 +708,5 @@ button, input, textarea, select { font: inherit; }
   .map-card { min-height: 260px; }
   .map-canvas { min-height: 220px; }
   #city-panel { width: 100%; min-height: 0; }
+  .path-grid { grid-template-columns: 1fr; }
 }
