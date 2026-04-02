@@ -130,8 +130,10 @@ function renderPathDiagramForEvent(city, eventType, diagramId, metaId) {
   const eventName = eventType === 'sunrise' ? '朝霞' : '晚霞';
   const bearing = city.strictMeta?.[eventType === 'sunrise' ? 'sunriseBearing' : 'sunsetBearing'];
   const centerProfile = profiles.find((item) => item.offsetMinutes === 0) ?? profiles[Math.floor(profiles.length / 2)];
+  const localLayers = [...(centerProfile?.localLayers ?? detail.localLayers ?? [])].sort((a, b) => a.heightKm - b.heightKm);
+  const hasLocalCloud = localLayers.some((layer) => layer.rh >= 80);
   const blockedText = centerProfile?.blockedCount ? `遮挡点 ${centerProfile.blockedCount}/${centerProfile.pathProfile.length}` : '未触发 RH80 遮挡';
-  meta.textContent = `${eventName} · 方位角 ${bearing?.toFixed(1) ?? '—'}° · 云底 ${centerProfile?.cloudBaseKm?.toFixed(1) ?? '—'} km · 顶点 ${centerProfile?.vertexKm?.toFixed(1) ?? '—'} km · ${blockedText}`;
+  meta.textContent = `${eventName}光路图 · 方位角 ${bearing?.toFixed(1) ?? '—'}° · 云底 ${centerProfile?.cloudBaseKm?.toFixed(1) ?? '—'} km · 顶点 ${centerProfile?.vertexKm?.toFixed(1) ?? '—'} km · ${blockedText}`;
 
   const width = 860;
   const height = 420;
@@ -161,8 +163,6 @@ function renderPathDiagramForEvent(city, eventType, diagramId, metaId) {
   const lineEls = [];
   const markerEls = [];
 
-  const localLayers = [...(centerProfile?.localLayers ?? detail.localLayers ?? [])].sort((a, b) => a.heightKm - b.heightKm);
-  const hasLocalCloud = localLayers.some((layer) => layer.rh >= 80);
   if (localLayers.length) {
     localLayers.forEach((layer, layerIdx) => {
       const topKm = layer.heightKm;
@@ -208,17 +208,17 @@ function renderPathDiagramForEvent(city, eventType, diagramId, metaId) {
   }).join('');
   const bandLabels = altitudeTicks.map((level) => {
     const y = yFor(level / 1000);
-    const label = level === 12000 ? '12000m+' : `${level}m`;
+    const label = level === 12000 ? '12000m' : `${level}m`;
     return `<text x="12" y="${(y + 3).toFixed(1)}" class="path-band-label">${label}</text>`;
   }).join('');
 
-  const topSummary = (hasLocalCloud ? centerProfile.pathProfile : []).slice(0, 4).map((point) => {
+  const topSummary = hasLocalCloud ? centerProfile.pathProfile.slice(0, 4).map((point) => {
     const d = point.distanceKm.toFixed(0);
     const h = point.curveHeightKm?.toFixed(2) ?? '—';
     const rh = point.curveHumidity?.toFixed(0) ?? '—';
     const flag = point.blocked ? '阻' : '通';
     return `${d}km ${h}km RH${rh} ${flag}`;
-  }).join(' · ');
+  }).join(' · ') : '本地无云，光路不显示';
 
   const localSummary = localLayers.slice(0, 4).map((layer) => `${Math.round(layer.heightKm * 1000)}m RH${Math.round(layer.rh)}`).join(' · ');
 
@@ -234,12 +234,16 @@ function renderPathDiagramForEvent(city, eventType, diagramId, metaId) {
       ${origin}
       ${xLabels}
     </svg>
-    <div class="path-empty" style="margin-top:8px">${hasLocalCloud ? topSummary : '本地无云，光路不显示'}</div>
+    <div class="path-empty" style="margin-top:8px">${topSummary}</div>
     <div class="path-empty">${localSummary}</div>
   `;
 }
 
 function renderPathDiagram(city) {
+  renderPathDiagramForEvent(city, 'sunset', 'panel-sunset-path-diagram', 'panel-sunset-path-meta');
+  renderPathDiagramForEvent(city, 'sunrise', 'panel-sunrise-path-diagram', 'panel-sunrise-path-meta');
+}
+
   renderPathDiagramForEvent(city, 'sunset', 'panel-sunset-path-diagram', 'panel-sunset-path-meta');
   renderPathDiagramForEvent(city, 'sunrise', 'panel-sunrise-path-diagram', 'panel-sunrise-path-meta');
 }
