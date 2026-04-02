@@ -165,15 +165,38 @@ function estimateCloudBase(layers, gfsCloudBaseKm = null) {
   }
 
   const sorted = [...layers].sort((a, b) => a.heightKm - b.heightKm);
-  for (let i = 0; i < sorted.length - 1; i += 1) {
-    const low = sorted[i];
-    const high = sorted[i + 1];
-    if (low.rh >= 85 && high.rh >= 85) {
-      return {
-        cloudBaseKm: low.heightKm,
-        source: 'rh85-continuous-2',
-      };
+  const findRunStart = (minHeightKm = 0) => {
+    for (let i = 0; i < sorted.length - 1; i += 1) {
+      const low = sorted[i];
+      const high = sorted[i + 1];
+      if (low.heightKm >= minHeightKm && low.rh >= 85 && high.rh >= 85) {
+        return low;
+      }
     }
+    return null;
+  };
+
+  const lowBase = findRunStart(0);
+  if (lowBase && lowBase.heightKm <= 1.0) {
+    return {
+      cloudBaseKm: lowBase.heightKm,
+      source: 'rh85-continuous-low',
+    };
+  }
+
+  const upperBase = findRunStart(1.0);
+  if (upperBase) {
+    return {
+      cloudBaseKm: upperBase.heightKm,
+      source: 'rh85-continuous-high',
+    };
+  }
+
+  if (lowBase) {
+    return {
+      cloudBaseKm: lowBase.heightKm,
+      source: 'rh85-continuous-fallback',
+    };
   }
 
   const present = sorted.filter((layer) => layer.rh >= THRESHOLDS.cloudPresent.rh && layer.cloudCover >= THRESHOLDS.cloudPresent.cloudCover);
