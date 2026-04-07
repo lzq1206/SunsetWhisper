@@ -244,10 +244,6 @@ function renderPathDiagram(city) {
   renderPathDiagramForEvent(city, 'sunrise', 'panel-sunrise-path-diagram', 'panel-sunrise-path-meta');
 }
 
-  renderPathDiagramForEvent(city, 'sunset', 'panel-sunset-path-diagram', 'panel-sunset-path-meta');
-  renderPathDiagramForEvent(city, 'sunrise', 'panel-sunrise-path-diagram', 'panel-sunrise-path-meta');
-}
-
 function hydrateCityStates(payload) {
   cityStates = (payload?.cities ?? []).map((city) => {
     const base = CITY_LOOKUP[city.id] ?? city;
