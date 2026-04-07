@@ -616,23 +616,29 @@ function saveCache(data) {
   }
 }
 
+function isCityForecastUsable(city) {
+  return (city?.forecast?.series?.length ?? 0) > 0;
+}
+
 function isPayloadUsable(payload) {
   const cities = Array.isArray(payload?.cities) ? payload.cities : [];
   if (!cities.length) return false;
-  const valid = cities.filter((city) => (city?.forecast?.series?.length ?? 0) > 0).length;
-  return valid / cities.length >= MIN_VALID_CITY_RATIO;
+  const validCityCount = cities.filter(isCityForecastUsable).length;
+  return validCityCount / cities.length >= MIN_VALID_CITY_RATIO;
 }
 
 function payloadCoverageText(payload) {
   const cities = Array.isArray(payload?.cities) ? payload.cities : [];
-  const valid = cities.filter((city) => (city?.forecast?.series?.length ?? 0) > 0).length;
-  return `${valid}/${cities.length}`;
+  const validCityCount = cities.filter(isCityForecastUsable).length;
+  return `${validCityCount}/${cities.length}`;
 }
 
 async function loadStaticPayload() {
   const cached = loadCache();
-  if (cached && isPayloadUsable(cached)) return cached;
-  if (cached) localStorage.removeItem(CACHE_KEY);
+  if (cached) {
+    if (isPayloadUsable(cached)) return cached;
+    localStorage.removeItem(CACHE_KEY);
+  }
 
   const response = await fetch(`${STATIC_DATA_URL}?v=${Date.now()}`, { cache: 'no-store' });
   if (!response.ok) throw new Error(`static payload ${response.status}`);

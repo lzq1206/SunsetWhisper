@@ -673,12 +673,12 @@ await copyRecursive(path.join(ROOT, 'js'), path.join(DIST, 'js'));
 await fs.writeFile(path.join(DIST, '.nojekyll'), '', 'utf8');
 
 const cities = await runBatched(CITIES, CONCURRENCY, 4, 4000, fetchCity);
-const validCities = cities.filter((city) => (city?.forecast?.series?.length ?? 0) > 0).length;
-const validRatio = cities.length ? validCities / cities.length : 0;
+const validCityCount = cities.filter((city) => (city?.forecast?.series?.length ?? 0) > 0).length;
+const validRatio = cities.length ? validCityCount / cities.length : 0;
 const erroredCities = cities.filter((city) => city?.source === 'error').length;
-console.log(`Forecast coverage: ${validCities}/${cities.length} valid cities, ${erroredCities} errors`);
+console.log(`Forecast coverage: ${validCityCount}/${cities.length} valid cities, ${erroredCities} errors`);
 if (validRatio < MIN_VALID_CITY_RATIO) {
-  throw new Error(`Insufficient forecast coverage (${validCities}/${cities.length}); failing build to avoid deploying incomplete forecast data`);
+  throw new Error(`Insufficient forecast coverage (${validCityCount}/${cities.length}); failing build to avoid deploying incomplete forecast data`);
 }
 
 const payload = {
