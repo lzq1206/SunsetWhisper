@@ -18,6 +18,7 @@ const OPEN_METEO_URL = 'https://api.open-meteo.com/v1/gfs';
 const AIR_QUALITY_URL = 'https://air-quality-api.open-meteo.com/v1/air-quality';
 const WEATHER_VARS = ['cloud_cover', 'cloud_cover_low', 'cloud_cover_mid', 'cloud_cover_high'].join(',');
 const AIR_QUALITY_VARS = 'aerosol_optical_depth';
+const MIN_VALID_CITY_RATIO = 0.6;
 
 const EVENT_ORDER = ['sunset', 'sunrise'];
 
@@ -614,13 +615,22 @@ function saveCache(data) {
   }
 }
 
+function isPayloadUsable(payload) {
+  const cities = Array.isArray(payload?.cities) ? payload.cities : [];
+  if (!cities.length) return false;
+  const valid = cities.filter((city) => (city?.forecast?.series?.length ?? 0) > 0).length;
+  return valid / cities.length >= MIN_VALID_CITY_RATIO;
+}
+
 async function loadStaticPayload() {
   const cached = loadCache();
-  if (cached) return cached;
+  if (cached && isPayloadUsable(cached)) return cached;
+  if (cached) localStorage.removeItem(CACHE_KEY);
 
   const response = await fetch(`${STATIC_DATA_URL}?v=${Date.now()}`, { cache: 'no-store' });
   if (!response.ok) throw new Error(`static payload ${response.status}`);
   const payload = await response.json();
+  if (!isPayloadUsable(payload)) throw new Error('static payload invalid or incomplete');
   saveCache(payload);
   return payload;
 }
