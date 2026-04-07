@@ -622,6 +622,12 @@ function isPayloadUsable(payload) {
   return valid / cities.length >= MIN_VALID_CITY_RATIO;
 }
 
+function payloadCoverageText(payload) {
+  const cities = Array.isArray(payload?.cities) ? payload.cities : [];
+  const valid = cities.filter((city) => (city?.forecast?.series?.length ?? 0) > 0).length;
+  return `${valid}/${cities.length}`;
+}
+
 async function loadStaticPayload() {
   const cached = loadCache();
   if (cached && isPayloadUsable(cached)) return cached;
@@ -630,7 +636,9 @@ async function loadStaticPayload() {
   const response = await fetch(`${STATIC_DATA_URL}?v=${Date.now()}`, { cache: 'no-store' });
   if (!response.ok) throw new Error(`static payload ${response.status}`);
   const payload = await response.json();
-  if (!isPayloadUsable(payload)) throw new Error('static payload invalid or incomplete');
+  if (!isPayloadUsable(payload)) {
+    throw new Error(`static payload below minimum coverage threshold (${Math.round(MIN_VALID_CITY_RATIO * 100)}%), coverage=${payloadCoverageText(payload)}`);
+  }
   saveCache(payload);
   return payload;
 }

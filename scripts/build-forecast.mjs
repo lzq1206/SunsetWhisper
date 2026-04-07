@@ -678,7 +678,7 @@ const validRatio = cities.length ? validCities / cities.length : 0;
 const erroredCities = cities.filter((city) => city?.source === 'error').length;
 console.log(`Forecast coverage: ${validCities}/${cities.length} valid cities, ${erroredCities} errors`);
 if (validRatio < MIN_VALID_CITY_RATIO) {
-  throw new Error(`Insufficient forecast coverage (${validCities}/${cities.length}); aborting publish to avoid invalid all-zero data`);
+  throw new Error(`Insufficient forecast coverage (${validCities}/${cities.length}); aborting publish to avoid deploying incomplete forecast data`);
 }
 
 const payload = {
