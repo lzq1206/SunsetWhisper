@@ -18,6 +18,8 @@ const OPEN_METEO_URL = 'https://api.open-meteo.com/v1/gfs';
 const AIR_QUALITY_URL = 'https://air-quality-api.open-meteo.com/v1/air-quality';
 const WEATHER_VARS = ['cloud_cover', 'cloud_cover_low', 'cloud_cover_mid', 'cloud_cover_high'].join(',');
 const AIR_QUALITY_VARS = 'aerosol_optical_depth';
+const MIN_VALID_CITY_RATIO = 0.6;
+const MIN_VALID_CITY_PERCENT = Math.round(MIN_VALID_CITY_RATIO * 100);
 
 const EVENT_ORDER = ['sunset', 'sunrise'];
 
@@ -614,13 +616,36 @@ function saveCache(data) {
   }
 }
 
+function isCityForecastUsable(city) {
+  return (city?.forecast?.series?.length ?? 0) > 0;
+}
+
+function isPayloadUsable(payload) {
+  const cities = Array.isArray(payload?.cities) ? payload.cities : [];
+  if (!cities.length) return false;
+  const validCityCount = cities.filter(isCityForecastUsable).length;
+  return validCityCount / cities.length >= MIN_VALID_CITY_RATIO;
+}
+
+function payloadCoverageText(payload) {
+  const cities = Array.isArray(payload?.cities) ? payload.cities : [];
+  const validCityCount = cities.filter(isCityForecastUsable).length;
+  return `${validCityCount}/${cities.length}`;
+}
+
 async function loadStaticPayload() {
   const cached = loadCache();
-  if (cached) return cached;
+  if (cached) {
+    if (isPayloadUsable(cached)) return cached;
+    localStorage.removeItem(CACHE_KEY);
+  }
 
   const response = await fetch(`${STATIC_DATA_URL}?v=${Date.now()}`, { cache: 'no-store' });
   if (!response.ok) throw new Error(`static payload ${response.status}`);
   const payload = await response.json();
+  if (!isPayloadUsable(payload)) {
+    throw new Error(`static payload below minimum coverage threshold (${MIN_VALID_CITY_PERCENT}%), coverage=${payloadCoverageText(payload)}`);
+  }
   saveCache(payload);
   return payload;
 }

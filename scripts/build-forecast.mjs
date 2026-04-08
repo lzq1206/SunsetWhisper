@@ -25,6 +25,7 @@ const PRESSURE_LEVELS = [1000, 925, 850, 700, 600, 500, 400];
 const SAMPLE_DISTANCES_KM = [0, 20, 40, 60, 80, 110, 140, 180, 230, 290, 360, 450, 550, 650, 760, 880, 1000];
 const CONCURRENCY = 2;
 const EARTH_RADIUS_KM = 6371;
+const MIN_VALID_CITY_RATIO = 0.6;
 
 globalThis.SunCalc = SunCalc;
 
@@ -672,6 +673,13 @@ await copyRecursive(path.join(ROOT, 'js'), path.join(DIST, 'js'));
 await fs.writeFile(path.join(DIST, '.nojekyll'), '', 'utf8');
 
 const cities = await runBatched(CITIES, CONCURRENCY, 4, 4000, fetchCity);
+const validCityCount = cities.filter((city) => (city?.forecast?.series?.length ?? 0) > 0).length;
+const validRatio = cities.length ? validCityCount / cities.length : 0;
+const erroredCities = cities.filter((city) => city?.source === 'error').length;
+console.log(`Forecast coverage: ${validCityCount}/${cities.length} valid cities, ${erroredCities} errors`);
+if (validRatio < MIN_VALID_CITY_RATIO) {
+  throw new Error(`Insufficient forecast coverage (${validCityCount}/${cities.length}); failing build to avoid deploying incomplete forecast data`);
+}
 
 const payload = {
   generatedAt: new Date().toISOString(),
