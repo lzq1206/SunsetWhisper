@@ -1,11 +1,11 @@
-name: Deploy to GitHub Pages (Domestic)
+name: Deploy to GitHub Pages (International)
 
 on:
   push:
     branches:
       - main
   schedule:
-    - cron: '30 12 * * *'
+    - cron: '30 13 * * *'
   workflow_dispatch:
 
 permissions:
@@ -42,7 +42,7 @@ jobs:
         env:
           TZ: Asia/Shanghai
           NODE_OPTIONS: '--max-old-space-size=4096'
-          TARGET_GROUP: 'domestic'
+          TARGET_GROUP: 'international'
 
       - name: Cache forecast data
         run: |

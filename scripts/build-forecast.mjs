@@ -595,8 +595,8 @@ async function fetchPathSamples(city, weather) {
   };
 }
 
-async function fetchCity(city, cityIndex) {
-  const label = `[${cityIndex + 1}/${CITIES.length}] ${city.name}`;
+async function fetchCity(city, cityIndex, totalTargetCount) {
+  const label = `[${cityIndex + 1}/${totalTargetCount}] ${city.name}`;
   try {
     console.log(`${label}: fetching base weather...`);
     const baseWeather = await fetchBaseWeather(city);
@@ -726,25 +726,58 @@ await copyRecursive(path.join(ROOT, 'css'), path.join(DIST, 'css'));
 await copyRecursive(path.join(ROOT, 'js'), path.join(DIST, 'js'));
 await fs.writeFile(path.join(DIST, '.nojekyll'), '', 'utf8');
 
-console.log(`\n=== Starting forecast build for ${CITIES.length} cities ===`);
+const targetGroup = process.env.TARGET_GROUP;
+let targetCities = CITIES;
+if (targetGroup === 'domestic') {
+  targetCities = CITIES.filter(c => c.region !== '国际');
+} else if (targetGroup === 'international') {
+  targetCities = CITIES.filter(c => c.region === '国际');
+}
+
+console.log(`\n=== Starting forecast build for ${targetCities.length} cities (Group: ${targetGroup || 'all'}) ===`);
 console.log(`Sample points per direction: ${SAMPLE_DISTANCES_KM.length}`);
-console.log(`Estimated API calls: ~${CITIES.length * (2 + 1 + SAMPLE_DISTANCES_KM.length * 2)}`);
+console.log(`Estimated API calls: ~${targetCities.length * (2 + 1 + SAMPLE_DISTANCES_KM.length * 2)}`);
 console.log(`Request delay: ${REQUEST_DELAY_MS}ms, batch pause: ${BATCH_PAUSE_MS}ms\n`);
 
 const startTime = Date.now();
-const cities = await runBatched(CITIES, CONCURRENCY, 3, BATCH_PAUSE_MS, fetchCity);
+const fetchedCities = await runBatched(targetCities, CONCURRENCY, 3, BATCH_PAUSE_MS, (c, i) => fetchCity(c, i, targetCities.length));
 const elapsed = ((Date.now() - startTime) / 1000 / 60).toFixed(1);
 
-const validCityCount = cities.filter((city) => (city?.forecast?.series?.length ?? 0) > 0).length;
-const validRatio = cities.length ? validCityCount / cities.length : 0;
-const erroredCities = cities.filter((city) => city?.source === 'error').length;
-const strictCities = cities.filter((city) => city?.source === 'open-meteo-gfs-strict').length;
-const simpleCities = cities.filter((city) => city?.source?.includes('simple')).length;
-const cachedCities = cities.filter((city) => city?.source === 'cache-fallback').length;
+// Merge with earlier data
+const mergedCitiesMap = new Map();
+if (previousPayload && Array.isArray(previousPayload.cities)) {
+  for (const c of previousPayload.cities) {
+    mergedCitiesMap.set(c.id, c);
+  }
+}
+for (const c of fetchedCities) {
+  mergedCitiesMap.set(c.id, c);
+}
+
+// Preserve defined order of CITIES
+const finalCities = CITIES.map((baseCity) => {
+  if (mergedCitiesMap.has(baseCity.id)) {
+    return mergedCitiesMap.get(baseCity.id);
+  }
+  return {
+    id: baseCity.id, name: baseCity.name, lat: baseCity.lat, lon: baseCity.lon,
+    province: baseCity.province, region: baseCity.region,
+    forecast: { series: [], daily: [], best: null },
+    source: 'error', error: 'No data available',
+    bestScore: 0, bestEventType: null, bestEventTime: null,
+  };
+});
+
+const validCityCount = finalCities.filter((city) => (city?.forecast?.series?.length ?? 0) > 0).length;
+const validRatio = finalCities.length ? validCityCount / finalCities.length : 0;
+const erroredCities = finalCities.filter((city) => city?.source === 'error').length;
+const strictCities = finalCities.filter((city) => city?.source === 'open-meteo-gfs-strict').length;
+const simpleCities = finalCities.filter((city) => city?.source?.includes('simple')).length;
+const cachedCities = finalCities.filter((city) => city?.source === 'cache-fallback').length;
 
 console.log(`\n=== Build complete (${elapsed} min) ===`);
 console.log(`Total API requests: ${totalRequests} (${failedRequests} failed)`);
-console.log(`Coverage: ${validCityCount}/${cities.length} valid cities (${(validRatio * 100).toFixed(1)}%)`);
+console.log(`Coverage: ${validCityCount}/${finalCities.length} valid cities (${(validRatio * 100).toFixed(1)}%)`);
 console.log(`Sources: ${strictCities} strict, ${simpleCities} simple, ${cachedCities} cached, ${erroredCities} errors`);
 
 if (validRatio < MIN_VALID_CITY_RATIO) {
@@ -762,8 +795,8 @@ const payload = {
   algorithm: 'ray-path-humidity-v1',
   thresholds: THRESHOLDS,
   notes: '严格版：分层湿度 + 太阳方位光路采样 + 地球曲率照亮判别',
-  stats: { totalCities: cities.length, validCities: validCityCount, strictCities, simpleCities, cachedCities, erroredCities, elapsedMinutes: Number(elapsed), totalRequests, failedRequests },
-  cities,
+  stats: { totalCities: finalCities.length, validCities: validCityCount, strictCities, simpleCities, cachedCities, erroredCities, targetGroup: targetGroup || 'all', elapsedMinutes: Number(elapsed), totalRequests, failedRequests },
+  cities: finalCities,
 };
 
 await fs.mkdir(path.dirname(OUT_PATH), { recursive: true });
