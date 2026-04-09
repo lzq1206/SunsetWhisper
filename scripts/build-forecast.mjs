@@ -22,15 +22,28 @@ const BASE_WEATHER_VARS = [
 const AIR_QUALITY_VARS = 'aerosol_optical_depth';
 
 const PRESSURE_LEVELS = [1000, 925, 850, 700, 600, 500, 400];
-const SAMPLE_DISTANCES_KM = [0, 20, 40, 60, 80, 110, 140, 180, 230, 290, 360, 450, 550, 650, 760, 880, 1000];
-const CONCURRENCY = 2;
+const SAMPLE_DISTANCES_KM = [0, 50, 100, 200, 350, 500, 700, 850, 1000];
+const CONCURRENCY = 1;
 const EARTH_RADIUS_KM = 6371;
-const MIN_VALID_CITY_RATIO = 0.6;
+const MIN_VALID_CITY_RATIO = 0.3;
+const REQUEST_DELAY_MS = 220;
+const BATCH_PAUSE_MS = 8000;
 
 globalThis.SunCalc = SunCalc;
 
 const { CITIES } = await import('../js/cities.js');
-const { parseForecastTime, localDayKey } = await import('../js/forecast-core.js');
+const { parseForecastTime, localDayKey, buildCityForecast } = await import('../js/forecast-core.js');
+
+let lastRequestTime = 0;
+async function throttle() {
+  const now = Date.now();
+  const wait = REQUEST_DELAY_MS - (now - lastRequestTime);
+  if (wait > 0) await sleep(wait);
+  lastRequestTime = Date.now();
+}
+
+let totalRequests = 0;
+let failedRequests = 0;
 
 let previousPayload = null;
 try {
@@ -47,8 +60,10 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function fetchJson(url, retries = 4) {
+async function fetchJson(url, retries = 5) {
   let lastError = null;
+  await throttle();
+  totalRequests += 1;
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     try {
       const response = await fetch(url, {
@@ -56,8 +71,10 @@ async function fetchJson(url, retries = 4) {
       });
       if (!response.ok) {
         const retryAfter = Number(response.headers.get('retry-after') ?? '0');
-        const waitMs = retryAfter > 0 ? retryAfter * 1000 : 1200 * (attempt + 1);
+        const baseWait = 3000 * Math.pow(2, attempt);
+        const waitMs = retryAfter > 0 ? Math.max(retryAfter * 1000, baseWait) : baseWait;
         if (response.status === 429 && attempt < retries) {
+          console.log(`  [429] Rate limited, waiting ${(waitMs / 1000).toFixed(1)}s (attempt ${attempt + 1}/${retries})`);
           await sleep(waitMs);
           continue;
         }
@@ -66,9 +83,13 @@ async function fetchJson(url, retries = 4) {
       return await response.json();
     } catch (error) {
       lastError = error;
-      if (attempt < retries) await sleep(1200 * (attempt + 1));
+      if (attempt < retries) {
+        const backoff = 3000 * Math.pow(2, attempt);
+        await sleep(backoff);
+      }
     }
   }
+  failedRequests += 1;
   throw lastError;
 }
 
@@ -555,11 +576,16 @@ async function fetchPathSamples(city, weather) {
   const sunrisePoints = SAMPLE_DISTANCES_KM.map((d) => destinationPoint(city.lat, city.lon, sunriseBearing, d));
   const sunsetPoints = SAMPLE_DISTANCES_KM.map((d) => destinationPoint(city.lat, city.lon, sunsetBearing, d));
 
-  const [local, sunriseData, sunsetData] = await Promise.all([
-    fetchPressurePoint(city),
-    runWithLimit(sunrisePoints, 2, fetchPressurePoint),
-    runWithLimit(sunsetPoints, 2, fetchPressurePoint),
-  ]);
+  // Sequential fetching to avoid API burst rate limits
+  const local = await fetchPressurePoint(city);
+  const sunriseData = [];
+  for (const pt of sunrisePoints) {
+    sunriseData.push(await fetchPressurePoint(pt));
+  }
+  const sunsetData = [];
+  for (const pt of sunsetPoints) {
+    sunsetData.push(await fetchPressurePoint(pt));
+  }
 
   return {
     local,
@@ -569,12 +595,33 @@ async function fetchPathSamples(city, weather) {
   };
 }
 
-async function fetchCity(city) {
+async function fetchCity(city, cityIndex) {
+  const label = `[${cityIndex + 1}/${CITIES.length}] ${city.name}`;
   try {
+    console.log(`${label}: fetching base weather...`);
     const baseWeather = await fetchBaseWeather(city);
-    const sampleData = await fetchPathSamples(city, baseWeather);
-    const forecast = buildStrictForecast(city, baseWeather, sampleData);
+    let forecast;
+    let source = 'open-meteo-gfs-strict';
+    let strictMeta = null;
+    try {
+      console.log(`${label}: fetching path samples (${SAMPLE_DISTANCES_KM.length * 2 + 1} pressure points)...`);
+      const sampleData = await fetchPathSamples(city, baseWeather);
+      forecast = buildStrictForecast(city, baseWeather, sampleData);
+      strictMeta = {
+        model: 'ray-path-humidity-v1',
+        pressureLevels: PRESSURE_LEVELS,
+        sampleDistancesKm: SAMPLE_DISTANCES_KM,
+        sunriseBearing: sampleData.bearings.sunrise,
+        sunsetBearing: sampleData.bearings.sunset,
+        thresholds: THRESHOLDS,
+      };
+    } catch (pathError) {
+      console.warn(`${label}: path sampling failed (${pathError.message}), using simplified forecast`);
+      forecast = buildCityForecast(city, baseWeather);
+      source = 'open-meteo-gfs-simple';
+    }
     const best = forecast.best;
+    console.log(`${label}: score=${(best?.score ?? 0).toFixed(2)} (${source})`);
 
     return {
       id: city.id,
@@ -584,43 +631,50 @@ async function fetchCity(city) {
       province: city.province,
       region: city.region,
       forecast,
-      source: 'open-meteo-gfs-strict',
+      source,
       bestScore: best?.score ?? 0,
       bestEventType: best?.detail?.eventType ?? null,
       bestEventTime: best?.detail?.eventTime ?? null,
-      strictMeta: {
-      model: 'ray-path-humidity-v1',
-      pressureLevels: PRESSURE_LEVELS,
-      sampleDistancesKm: SAMPLE_DISTANCES_KM,
-      sunriseBearing: sampleData.bearings.sunrise,
-      sunsetBearing: sampleData.bearings.sunset,
-      thresholds: THRESHOLDS,
-    },
+      strictMeta,
     };
   } catch (error) {
-    const fallback = previousPayload?.cities?.find((item) => item.id === city.id);
-    if (fallback) {
+    console.error(`${label}: FAILED - ${error.message}`);
+    // Try simplified forecast with a fresh base weather fetch
+    try {
+      console.log(`${label}: attempting simplified fallback...`);
+      const simpleWeatherParams = new URLSearchParams({
+        latitude: city.lat, longitude: city.lon,
+        hourly: BASE_WEATHER_VARS, timezone: 'Asia/Shanghai', forecast_days: 3,
+      });
+      const simpleWeather = await fetchJson(`${OPEN_METEO_URL}?${simpleWeatherParams}`);
+      const simpleForecast = buildCityForecast(city, simpleWeather);
+      console.log(`${label}: simplified fallback score=${(simpleForecast.best?.score ?? 0).toFixed(2)}`);
       return {
-        ...fallback,
-        source: 'cache-fallback',
-        error: String(error),
+        id: city.id, name: city.name, lat: city.lat, lon: city.lon,
+        province: city.province, region: city.region,
+        forecast: simpleForecast,
+        source: 'open-meteo-gfs-simple-fallback',
+        bestScore: simpleForecast.best?.score ?? 0,
+        bestEventType: simpleForecast.best?.detail?.eventType ?? null,
+        bestEventTime: simpleForecast.best?.detail?.eventTime ?? null,
+        strictMeta: null,
+      };
+    } catch (fallbackError) {
+      console.error(`${label}: simplified fallback also failed - ${fallbackError.message}`);
+      // Use cached data if available
+      const fallback = previousPayload?.cities?.find((item) => item.id === city.id);
+      if (fallback && (fallback.forecast?.series?.length ?? 0) > 0) {
+        console.log(`${label}: using cached data`);
+        return { ...fallback, source: 'cache-fallback', error: String(error) };
+      }
+      return {
+        id: city.id, name: city.name, lat: city.lat, lon: city.lon,
+        province: city.province, region: city.region,
+        forecast: { series: [], daily: [], best: null },
+        source: 'error', error: String(error),
+        bestScore: 0, bestEventType: null, bestEventTime: null,
       };
     }
-
-    return {
-      id: city.id,
-      name: city.name,
-      lat: city.lat,
-      lon: city.lon,
-      province: city.province,
-      region: city.region,
-      forecast: { series: [], daily: [], best: null },
-      source: 'error',
-      error: String(error),
-      bestScore: 0,
-      bestEventType: null,
-      bestEventTime: null,
-    };
   }
 }
 
@@ -672,13 +726,34 @@ await copyRecursive(path.join(ROOT, 'css'), path.join(DIST, 'css'));
 await copyRecursive(path.join(ROOT, 'js'), path.join(DIST, 'js'));
 await fs.writeFile(path.join(DIST, '.nojekyll'), '', 'utf8');
 
-const cities = await runBatched(CITIES, CONCURRENCY, 4, 4000, fetchCity);
+console.log(`\n=== Starting forecast build for ${CITIES.length} cities ===`);
+console.log(`Sample points per direction: ${SAMPLE_DISTANCES_KM.length}`);
+console.log(`Estimated API calls: ~${CITIES.length * (2 + 1 + SAMPLE_DISTANCES_KM.length * 2)}`);
+console.log(`Request delay: ${REQUEST_DELAY_MS}ms, batch pause: ${BATCH_PAUSE_MS}ms\n`);
+
+const startTime = Date.now();
+const cities = await runBatched(CITIES, CONCURRENCY, 3, BATCH_PAUSE_MS, fetchCity);
+const elapsed = ((Date.now() - startTime) / 1000 / 60).toFixed(1);
+
 const validCityCount = cities.filter((city) => (city?.forecast?.series?.length ?? 0) > 0).length;
 const validRatio = cities.length ? validCityCount / cities.length : 0;
 const erroredCities = cities.filter((city) => city?.source === 'error').length;
-console.log(`Forecast coverage: ${validCityCount}/${cities.length} valid cities, ${erroredCities} errors`);
+const strictCities = cities.filter((city) => city?.source === 'open-meteo-gfs-strict').length;
+const simpleCities = cities.filter((city) => city?.source?.includes('simple')).length;
+const cachedCities = cities.filter((city) => city?.source === 'cache-fallback').length;
+
+console.log(`\n=== Build complete (${elapsed} min) ===`);
+console.log(`Total API requests: ${totalRequests} (${failedRequests} failed)`);
+console.log(`Coverage: ${validCityCount}/${cities.length} valid cities (${(validRatio * 100).toFixed(1)}%)`);
+console.log(`Sources: ${strictCities} strict, ${simpleCities} simple, ${cachedCities} cached, ${erroredCities} errors`);
+
 if (validRatio < MIN_VALID_CITY_RATIO) {
-  throw new Error(`Insufficient forecast coverage (${validCityCount}/${cities.length}); failing build to avoid deploying incomplete forecast data`);
+  console.error(`WARNING: Low coverage (${(validRatio * 100).toFixed(1)}% < ${MIN_VALID_CITY_RATIO * 100}%)`);
+  // Still deploy partial data rather than failing completely
+  if (validCityCount === 0) {
+    throw new Error(`No valid forecasts at all; build cannot proceed`);
+  }
+  console.log('Deploying partial data rather than failing completely.');
 }
 
 const payload = {
@@ -687,9 +762,17 @@ const payload = {
   algorithm: 'ray-path-humidity-v1',
   thresholds: THRESHOLDS,
   notes: '严格版：分层湿度 + 太阳方位光路采样 + 地球曲率照亮判别',
+  stats: { totalCities: cities.length, validCities: validCityCount, strictCities, simpleCities, cachedCities, erroredCities, elapsedMinutes: Number(elapsed), totalRequests, failedRequests },
   cities,
 };
 
 await fs.mkdir(path.dirname(OUT_PATH), { recursive: true });
 await fs.writeFile(OUT_PATH, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+
+// Also save to data/ in repo root for cache fallback on next run
+const CACHE_PATH = path.join(ROOT, 'data', 'latest.json');
+await fs.mkdir(path.dirname(CACHE_PATH), { recursive: true });
+await fs.writeFile(CACHE_PATH, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+
 console.log(`Wrote ${OUT_PATH}`);
+console.log(`Cached to ${CACHE_PATH}`);

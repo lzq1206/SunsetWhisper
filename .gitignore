@@ -1,3 +1,4 @@
 node_modules/
 dist/
-data/latest.json
+test_debug.mjs
+debug_output.txt

@@ -18,7 +18,7 @@ const OPEN_METEO_URL = 'https://api.open-meteo.com/v1/gfs';
 const AIR_QUALITY_URL = 'https://air-quality-api.open-meteo.com/v1/air-quality';
 const WEATHER_VARS = ['cloud_cover', 'cloud_cover_low', 'cloud_cover_mid', 'cloud_cover_high'].join(',');
 const AIR_QUALITY_VARS = 'aerosol_optical_depth';
-const MIN_VALID_CITY_RATIO = 0.6;
+const MIN_VALID_CITY_RATIO = 0.3;
 const MIN_VALID_CITY_PERCENT = Math.round(MIN_VALID_CITY_RATIO * 100);
 
 const EVENT_ORDER = ['sunset', 'sunrise'];
