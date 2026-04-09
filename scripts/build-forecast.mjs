@@ -334,11 +334,12 @@ function evaluateEventAtHour({ city, baseWeather, sampleData, index, eventType, 
       const curveHeightKm = parabolaHeightKm(distanceKm, variantCloudBaseKm, variantVertexKm);
       const samplePoint = sampleData[eventType][pIdx] ?? sampleData[eventType][sampleData[eventType].length - 1];
       const sample = samplePointScore(samplePoint, sampleIndex, distanceKm, curveHeightKm);
+      const { layers, ...slimSample } = sample;
       return {
         distanceKm,
         curveHeightKm,
         vertexKm: variantVertexKm,
-        ...sample,
+        ...slimSample,
       };
     });
 
