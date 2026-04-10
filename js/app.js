@@ -50,9 +50,10 @@ function initEventMap(containerId) {
   const map = L.map(containerId, {
     center: [35.5, 103],
     zoom: 4,
-    zoomControl: true,
+    zoomControl: false,
     attributionControl: true,
   });
+  L.control.zoom({ position: 'bottomright' }).addTo(map);
 
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
@@ -145,18 +146,18 @@ function renderPathDiagramForEvent(city, eventType, diagramId, metaId) {
   const padB = 40;
   const plotW = width - padL - padR;
   const plotH = height - padT - padB;
-  const altitudeTicks = [12000, 10000, 8000, 6000, 4000, 2000, 0];
+  const altitudeTicks = [15000, 12000, 9000, 6000, 3000, 0];
   const localLeft = padL + 8;
   const localRight = padL + 72;
   const curveLeft = padL + 90;
   const maxDist = 1000;
   const innerW = plotW - (curveLeft - padL) - 8;
   const xFor = (d) => curveLeft + (Math.min(Math.max(d, 0), maxDist) / maxDist) * innerW;
-  const yFor = (km) => padT + plotH - Math.min(Math.max(km, 0), 12) / 12 * plotH;
+  const yFor = (km) => padT + plotH - Math.max(km, 0) / 15 * plotH;
   const groundY = (x) => {
     const t = (x - curveLeft) / Math.max(innerW, 1e-6);
     const sag = 18;
-    return padT + plotH - 12 - sag * (1 - Math.pow(2 * t - 1, 2));
+    return padT + plotH - 15 - sag * (1 - Math.pow(2 * t - 1, 2));
   };
   const originY = yFor(centerProfile?.cloudBaseKm ?? 0.1);
   const originX = curveLeft - 4;
@@ -168,7 +169,7 @@ function renderPathDiagramForEvent(city, eventType, diagramId, metaId) {
   if (localLayers.length) {
     localLayers.forEach((layer, layerIdx) => {
       const topKm = layer.heightKm;
-      const bottomKm = localLayers[layerIdx + 1]?.heightKm ?? 12;
+      const bottomKm = localLayers[layerIdx + 1]?.heightKm ?? 15;
       const y = yFor(bottomKm);
       const h = Math.max(3, yFor(topKm) - yFor(bottomKm));
       rects.push(`<rect x="${localLeft}" y="${y.toFixed(1)}" width="${localRight - localLeft}" height="${h.toFixed(1)}" fill="${pressureLevelColor(layer.level, layer.rh)}"></rect>`);
@@ -181,7 +182,7 @@ function renderPathDiagramForEvent(city, eventType, diagramId, metaId) {
       const cellW = 10;
       [...point.layers].sort((a, b) => a.heightKm - b.heightKm).forEach((layer, layerIdx, sortedLayers) => {
         const topKm = layer.heightKm;
-        const bottomKm = sortedLayers[layerIdx + 1]?.heightKm ?? 12;
+        const bottomKm = sortedLayers[layerIdx + 1]?.heightKm ?? 15;
         const y = yFor(bottomKm);
         const h = Math.max(3, yFor(topKm) - yFor(bottomKm));
         rects.push(`<rect x="${(x - cellW / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${cellW.toFixed(1)}" height="${h.toFixed(1)}" fill="${pressureLevelColor(layer.level, layer.rh)}"></rect>`);
@@ -210,7 +211,7 @@ function renderPathDiagramForEvent(city, eventType, diagramId, metaId) {
   }).join('');
   const bandLabels = altitudeTicks.map((level) => {
     const y = yFor(level / 1000);
-    const label = level === 12000 ? '12000m' : `${level}m`;
+    const label = level === 15000 ? '15000m' : `${level}m`;
     return `<text x="12" y="${(y + 3).toFixed(1)}" class="path-band-label">${label}</text>`;
   }).join('');
 
