@@ -334,12 +334,12 @@ function evaluateEventAtHour({ city, baseWeather, sampleData, index, eventType, 
       const curveHeightKm = parabolaHeightKm(distanceKm, variantCloudBaseKm, variantVertexKm);
       const samplePoint = sampleData[eventType][pIdx] ?? sampleData[eventType][sampleData[eventType].length - 1];
       const sample = samplePointScore(samplePoint, sampleIndex, distanceKm, curveHeightKm);
-      const { layers, ...slimSample } = sample;
       return {
-        distanceKm,
-        curveHeightKm,
-        vertexKm: variantVertexKm,
-        ...slimSample,
+        distanceKm: Number(distanceKm.toFixed(1)),
+        curveHeightKm: Number(curveHeightKm.toFixed(2)),
+        vertexKm: Number(variantVertexKm.toFixed(2)),
+        ...sample,
+        layers: sample.layers.map((l) => ({ heightKm: Number(l.heightKm.toFixed(2)), rh: Math.round(l.rh) }))
       };
     });
 
@@ -444,7 +444,6 @@ function evaluateEventAtHour({ city, baseWeather, sampleData, index, eventType, 
     blockedCount,
     blockedRatio,
     pathProfile,
-    windowProfiles,
     localLayers,
     strict: {
       algorithm: 'parabola-rh80-v2',
