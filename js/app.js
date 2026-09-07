@@ -417,21 +417,11 @@ function renderChart(city) {
   if (chartInstance) chartInstance.destroy();
 
   const series = [...(city.forecast.series ?? [])].sort((a, b) => new Date(a.time) - new Date(b.time));
-  const byDay = new Map();
-  for (const entry of series) {
-    const day = entry.day ?? entry.time?.slice(0, 10);
-    if (!day) continue;
-    if (!byDay.has(day)) byDay.set(day, {});
-    byDay.get(day)[entry.eventType] = entry;
-  }
-  const days = [...byDay.keys()].sort();
-  const pointScore = (entry) => (entry ? Number(entry.score.toFixed(2)) : null);
-  const pointHumidity = (entry) => (entry ? Number((entry.detail?.pathMean ?? entry.detail?.curveHumidity ?? entry.cloudMid ?? 0).toFixed(0)) : null);
-  const labels = days.map((day) => formatDate(day));
-  const sunriseData = days.map((day) => pointScore(byDay.get(day).sunrise));
-  const sunsetData = days.map((day) => pointScore(byDay.get(day).sunset));
-  const sunriseHumidity = days.map((day) => pointHumidity(byDay.get(day).sunrise));
-  const sunsetHumidity = days.map((day) => pointHumidity(byDay.get(day).sunset));
+  const labels = series.map((entry) => `${formatDate(entry.day)} · ${entry.eventType === 'sunrise' ? '日出' : '日落'}`);
+  const sunriseData = series.map((entry) => (entry.eventType === 'sunrise' ? Number(entry.score.toFixed(2)) : null));
+  const sunsetData = series.map((entry) => (entry.eventType === 'sunset' ? Number(entry.score.toFixed(2)) : null));
+  const cloudData = series.map((entry) => Number((entry.detail?.curveHumidity ?? entry.cloudMid ?? 0).toFixed(0)));
+  const blockedData = series.map((entry) => (entry.detail?.blocked ? 1 : 0));
 
   chartInstance = new Chart(ctx, {
     type: 'line',
@@ -439,7 +429,7 @@ function renderChart(city) {
       labels,
       datasets: [
         {
-          label: '朝霞评分',
+          label: '日出',
           data: sunriseData,
           borderColor: '#f7c59f',
           backgroundColor: 'rgba(247,197,159,0.10)',
@@ -448,10 +438,10 @@ function renderChart(city) {
           fill: false,
           yAxisID: 'yScore',
           pointRadius: 3,
-          spanGaps: true,
+          spanGaps: false,
         },
         {
-          label: '晚霞评分',
+          label: '日落',
           data: sunsetData,
           borderColor: '#ff6b35',
           backgroundColor: 'rgba(255,107,53,0.12)',
@@ -460,11 +450,11 @@ function renderChart(city) {
           fill: false,
           yAxisID: 'yScore',
           pointRadius: 3,
-          spanGaps: true,
+          spanGaps: false,
         },
         {
-          label: '朝霞路径 RH %',
-          data: sunriseHumidity,
+          label: '曲线RH %',
+          data: cloudData,
           borderColor: '#90caf9',
           borderWidth: 1,
           borderDash: [3, 3],
@@ -473,13 +463,13 @@ function renderChart(city) {
           pointRadius: 0,
         },
         {
-          label: '晚霞路径 RH %',
-          data: sunsetHumidity,
-          borderColor: '#b39ddb',
+          label: '遮挡',
+          data: blockedData,
+          borderColor: '#ff4d4f',
+          backgroundColor: 'rgba(255,77,79,0.16)',
           borderWidth: 1,
-          borderDash: [3, 3],
           tension: 0,
-          yAxisID: 'yCloud',
+          yAxisID: 'yBlock',
           pointRadius: 0,
         },
       ],
@@ -512,6 +502,11 @@ function renderChart(city) {
           title: { display: true, text: '曲线 RH %', color: '#aab4c3', font: { size: 11 } },
           ticks: { color: '#aab4c3' },
           grid: { drawOnChartArea: false },
+        },
+        yBlock: {
+          display: false,
+          min: 0,
+          max: 1,
         },
       },
     },
